@@ -44,11 +44,13 @@ void photoUpdate(float dt, float roll, float tip) {
         const float d = A.chaseBack * 0.85f;
         float rel = s_angle == SHOT_RIGHT ? 1.5708f : (s_angle == SHOT_LEFT ? -1.5708f : (s_angle == SHOT_FRONT ? 3.14159f : 3.14159f * 0.999f));
         const float a = s_s.yaw + rel + s_pan;
-        const float up = s_angle == SHOT_DOWN ? d * 1.6f : d * 0.15f;
-        v.pX = s_s.x + cosf(a) * d * (s_angle == SHOT_DOWN ? 0.35f : 1.f); v.pZ = s_s.z + sinf(a) * d * (s_angle == SHOT_DOWN ? 0.35f : 1.f);
+        // (from above: a high three-quarter from behind; the camera can't look straight down without distorting)
+        const float aa = s_angle == SHOT_DOWN ? a - 0.55f : a;
+        const float up = s_angle == SHOT_DOWN ? d * 0.95f : d * 0.15f, hz = s_angle == SHOT_DOWN ? d * 0.85f : d;
+        v.pX = s_s.x + cosf(aa) * hz; v.pZ = s_s.z + sinf(aa) * hz;
         v.pY = fmaxf(s_s.y + up + s_tilt * d * 0.5f, terrainHeight(v.pX, v.pZ) + 1.5f);
-        v.pYaw = a + 3.14159f;
-        v.pPitch = -atan2f(v.pY - s_s.y, d * (s_angle == SHOT_DOWN ? 0.35f : 1.f)) * 0.9f;
+        v.pYaw = aa + 3.14159f;
+        v.pPitch = -atan2f(v.pY - s_s.y, hz) * 0.9f;
     }
     if (s_label > 0.f) s_label -= dt;
     if (s_flash > 0.f) s_flash -= dt;

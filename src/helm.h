@@ -14,6 +14,7 @@
 namespace mantis {
 
 constexpr int SLIDER_X = 292, SLIDER_Y0 = 14, SLIDER_Y1 = 160;   // panel pixels
+constexpr int TWR_X0 = 4, TWR_Y0 = 30, TWR_X1 = 100, TWR_Y1 = 52;    // the CONTACT TOWER button (panel pixels)
 
 struct HelmEvents {
     bool aTap, aHold, cTap, view, recenter, mute;

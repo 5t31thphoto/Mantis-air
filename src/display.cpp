@@ -23,6 +23,7 @@ static volatile int s_pushIdx = 0;
 static uint16_t* s_ov = nullptr;
 static bool s_ovOn = false;
 static uint8_t s_ovRow[DH];
+static uint32_t s_ovGen = 1;                         // bumped whenever someone clears or switches the overlay
 static inline uint16_t swap16(uint16_t v) { return (uint16_t)((v >> 8) | (v << 8)); }
 
 static void displayWaitIdle();
@@ -38,8 +39,11 @@ uint16_t* overlayBuffer() {
     }
     return s_ov;
 }
-void overlayClear() { if (overlayBuffer()) memset(s_ov, 0, DW * DH * sizeof(uint16_t)); }   // (overlayBuffer waits)
+void overlayClear() { s_ovGen++; if (overlayBuffer()) memset(s_ov, 0, DW * DH * sizeof(uint16_t)); }   // (overlayBuffer waits)
+uint32_t overlayGeneration() { return s_ovGen; }
+void overlayAllRows() { if (s_ovOn) memset(s_ovRow, 1, sizeof s_ovRow); }
 void overlayEnable(bool on) {
+    s_ovGen++;
     s_ovOn = on && overlayBuffer();
     if (!s_ovOn) return;
     for (int y = 0; y < DH; y++) { s_ovRow[y] = 0; for (int x = 0; x < DW; x++) if (s_ov[y * DW + x]) { s_ovRow[y] = 1; break; } }

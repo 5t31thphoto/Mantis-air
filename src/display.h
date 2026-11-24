@@ -12,6 +12,8 @@ uint16_t* overlayBuffer();
 void overlayEnable(bool on);           // rescans which rows carry anything
 bool overlayEnabled();
 void overlayClear();
+uint32_t overlayGeneration();          // changes on every overlayEnable / overlayClear (who drew it last: see cockpit.cpp)
+void overlayAllRows();                 // (after overlayEnable(true)) composite every row: for content drawn after the scan
 // Exactly what the screen shows on row y (world + overlay), native RGB565.
 void compositeRow(int y, uint16_t* out320);
 // While saving to SD (it shares the SPI bus with the LCD) hold the bus: waits for the LCD push to finish.

@@ -1,5 +1,6 @@
 #pragma GCC optimize("Os")
 #include "store.h"
+#include "mem.h"
 #include "progress.h"
 #include "aircraft.h"
 #include "gigs.h"
@@ -16,11 +17,12 @@ static bool s_open = false, s_dirty = true;
 static uint8_t s_page = PG_GIGS;
 static char s_msg[40];
 static Airfield s_at;
-static Gig s_board[3]; static int s_boardN = 0;
+static Gig* s_board = nullptr; static int s_boardN = 0;   // (PSRAM: three gigs, made when the hangar first opens)
+static Gig* board() { if (!s_board) s_board = (Gig*)memSlow(3 * sizeof(Gig)); return s_board; }
 
 void storeOpen(const Airfield& at, uint32_t salt) {
     s_open = true; s_dirty = true; s_page = PG_GIGS; s_msg[0] = 0; s_at = at;
-    s_boardN = gigBoard(at, g_prog.rank, g_prog.current, salt, s_board);
+    s_boardN = board() ? gigBoard(at, g_prog.rank, g_prog.current, salt, s_board) : 0;
 }
 bool storeActive() { return s_open; }
 

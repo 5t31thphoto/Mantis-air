@@ -39,6 +39,7 @@ struct ViewInfo {
 };
 extern ViewInfo g_view;
 
+
 // Things the game puts in the sky for a gig: race gates (a ring facing yaw, radius r) and the target's beacon.
 enum : uint8_t { MK_GATE = 0, MK_GATE_NEXT, MK_BEACON, MK_BOGEY, MK_BOGEY_LOCK, MK_MISSILE, MK_ZONE, MK_GTARGET, MK_GTARGET_LOCK, MK_BOMB, MK_CRATE, MK_PIP };
 // MK_ZONE: a ring on the ground (r). MK_GTARGET: r = its kind (0 radar, 1 AA gun, 2 depot). MK_CRATE: pitch > 0 its chute is open.

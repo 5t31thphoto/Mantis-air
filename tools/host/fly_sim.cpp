@@ -115,9 +115,9 @@ static int s_mission = 0;   // 1 supply, 2 bomb, 3 recon
 static float s_missionAgl = 150.f;
 static bool missionSetup() {
   const char* m = getenv("MISSION"); if (!m) return false;
-  uint8_t want = !strcmp(m, "bomb") ? G_BOMBING : (!strcmp(m, "recon") ? G_RECON : (!strcmp(m, "strike") ? G_STRIKE : (!strcmp(m, "photo") ? G_PHOTO : G_SUPPLY)));
-  s_mission = want == G_SUPPLY ? 1 : (want == G_RECON ? 3 : (want == G_PHOTO ? 4 : 2));
-  s_missionAgl = s_mission == 1 ? 110.f : (s_mission == 3 ? 350.f : (s_mission == 4 ? 250.f : 420.f));
+  uint8_t want = !strcmp(m, "bomb") ? G_BOMBING : (!strcmp(m, "recon") ? G_RECON : (!strcmp(m, "strike") ? G_STRIKE : (!strcmp(m, "photo") ? G_PHOTO : (!strcmp(m, "intercept") ? G_INTERCEPT : G_SUPPLY))));
+  s_mission = want == G_SUPPLY ? 1 : (want == G_RECON ? 3 : (want == G_PHOTO ? 4 : (want == G_INTERCEPT ? 5 : 2)));
+  s_missionAgl = s_mission == 1 ? 110.f : (s_mission == 3 ? 350.f : (s_mission == 4 ? 250.f : (s_mission == 5 ? 600.f : 420.f)));
   Gig board[3];
   for (int r = 0; r < 6; r++) for (int i = -r; i <= r; i++) for (int j = -r; j <= r; j++) {
     if (abs(i) != r && abs(j) != r) continue;
@@ -186,6 +186,22 @@ static void missionFly(float& roll, float& pitch, int i) {
   const float vWant = air == A_FIGHTER ? 105.f : A.vStall * 1.6f;            // slow for the drop
   helmSetThrottle(clampf_(helmThrottle() + (vWant - ac.ias) * 0.004f, 0.15f, 1.f));
   g_prog.view = (aim && d < 1600.f) ? VIEW_DROP : VIEW_CHASE;
+  if (s_mission == 5) {                                  // a dogfight: at the nearest bogey, guns when it's in the nose
+    const Bogey* b = combatBogeys(); float best = 1e18f; int bi = -1;
+    for (int k = 0; k < BOGEY_N; k++) if (b[k].alive) { float dd = (b[k].x - ac.x) * (b[k].x - ac.x) + (b[k].z - ac.z) * (b[k].z - ac.z); if (dd < best) { best = dd; bi = k; } }
+    g_prog.view = VIEW_CHASE;
+    if (bi >= 0) {
+      const float bx = b[bi].x - ac.x, by = b[bi].y - ac.y, bz = b[bi].z - ac.z, bd = sqrtf(bx * bx + by * by + bz * bz);
+      const float wantY = atan2f(bz, bx), e = wrapPi(wantY - ac.yaw);
+      roll = clampf_((clampf_(e * 1.5f, -1.1f, 1.1f) - ac.roll) * 2.f - ac.p * 0.2f, -1.f, 1.f);
+      const float wantP = atan2f(by, sqrtf(bx * bx + bz * bz));
+      pitch = clampf_((wantP - ac.pitch) * 2.f + fabsf(ac.roll) * 0.4f - ac.q * 0.4f, -0.8f, 0.8f);
+      if (ac.agl < 150.f) pitch = 0.6f;
+      helmSetThrottle(0.8f);
+      M5.BtnA.down = bd < 900.f && fabsf(e) < 0.15f && fabsf(wantP - ac.pitch) < 0.15f;
+      return;
+    }
+  }
   if (s_mission == 4 && w && w->kind == W_PHOTO && s_photoSeq == 0 && d < 1300.f) { s_photoSeq = 1; printf("  camera up at t=%.1f, %.0f m out\n", t, d); }
   if (s_mission == 3 && w && w->kind == W_RECON) {      // the spy camera: fly at it; the sight looks ahead, shoot when it's in
     g_prog.view = d < 3000.f ? VIEW_DROP : VIEW_CHASE;
@@ -200,7 +216,29 @@ static void missionFly(float& roll, float& pitch, int i) {
   }
   (void)i;
 }
+namespace mantis { extern double g_planeArtUs; extern int g_planeArtN; }
+namespace mantis { void renderDebugPlane(int, int, float, float, float, float, float, float, const char*); }
+// PLANEVIEW=<prefix>: every aircraft from exact camera angles on a blank screen, then
+// exit (judging the aircraft art); also times each draw
+static bool planeView() {
+  const char* pre = getenv("PLANEVIEW"); if (!pre) return false;
+  renderInit();
+  struct { const char* n; float az, el, roll; int rpm; } V[] = {{"chase", 180.f, 10.f, 0.f, 100}, {"chasebank", 180.f, 10.f, 35.f, 100}, {"left", -90.f, 3.f, 0.f, 100},
+                                                       {"front", 0.f, 3.f, 0.f, 100}, {"frontidle", 0.f, 3.f, 0.f, 10}, {"quarter", 135.f, 22.f, 0.f, 100},
+                                                       {"quarteridle", 35.f, 15.f, 0.f, 10}, {"above", 175.f, 60.f, 0.f, 100}};
+  double total = 0; int n = 0;
+  for (int m = 0; m < 8; m++) for (auto& v : V) {
+    char p[160]; snprintf(p, sizeof p, "%s%d_%s.ppm", pre, m, v.n);
+    const float dist = m % 4 == 2 ? 24.f : 17.f;
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int rep = 0; rep < 50; rep++) mantis::renderDebugPlane(m, v.rpm, 0.f, 0.f, v.roll, v.az, v.el, dist, rep == 49 ? p : nullptr);
+    total += std::chrono::duration<double, std::micro>(std::chrono::high_resolution_clock::now() - t0).count() / 50; n++;
+  }
+  printf("%.1f us a draw (host, incl. clearing the test screen)\n", total / n);
+  return true;
+}
 int main(int argc, char** argv) {
+  if (planeView()) return 0;
   float minutes = argc > 1 ? atof(argv[1]) : 3.f;
   int asel = argc > 2 ? atoi(argv[2]) : 0;
   float cruiseAgl = argc > 4 ? atof(argv[4]) : 350.f;
@@ -210,6 +248,11 @@ int main(int argc, char** argv) {
   g_prog.owned = 15; g_prog.current = (uint8_t)asel; switchAircraft((uint8_t)asel);
   g_prog.view = argc > 3 ? atoi(argv[3]) : VIEW_CHASE;
   const bool mission = missionSetup();
+  if (!mission && getenv("AIRSTART")) {                 // AIRSTART=1: already flying, 400 m up (the jet can't leave a grass strip)
+    terrainUpdate(ac.x, ac.z, ac.yaw, 0.f, 1.f / 30.f);
+    aircraftResetAir(ac, air, ac.x, ac.z, ac.yaw, terrainHeight(ac.x, ac.z) + 400.f);
+    helmSetThrottle(0.8f);
+  }
   int frames = (int)(minutes * 60 * 30);
   double rtot = 0, rmax = 0; float maxAlt = 0, maxIas = 0; int nCrash = 0; bool airborne = false;
   for (int i = 0; i < frames; i++) {
@@ -244,6 +287,16 @@ int main(int argc, char** argv) {
     double ms = std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - a).count();
     rtot += ms; if (ms > rmax && i > 30) rmax = ms;
     { static int every = getenv("SNAP") ? atoi(getenv("SNAP")) : 0; if (every && i % every == every - 1) snap(i / every); if (getenv("VIEWCYCLE") && i % 900 == 0) g_prog.view = (uint8_t)((i / 900) % 3); }
+    { static const char* tt = getenv("TURN"); static int tn = 0;      // TURN=frame: photo mode's five angles, a still each
+      if (tt && i >= atoi(tt) && tn < 5 * 12) {
+        if (tn == 0) { if (getenv("TURNLEVEL")) { ac.roll = 0.f; ac.pitch = 0.02f; } photoEnter(ac, air); }   // (TURNLEVEL: wings level, to judge the model)
+        else if (tn % 12 == 0) photoNextAngle();
+        if (tn % 12 == 11) { char p[64]; snprintf(p, sizeof p, "turn_%d_%d.ppm", air, tn / 12); FILE* f = fopen(p, "wb");
+          if (f) { fprintf(f, "P6 320 240 255\n"); static uint16_t row[320]; for (int y = 0; y < 240; y++) { compositeRow(y, row); for (int x = 0; x < 320; x++) { uint16_t c = row[x];
+            unsigned char rgb[3] = {(unsigned char)(((c >> 11) & 31) * 255 / 31), (unsigned char)(((c >> 5) & 63) * 255 / 63), (unsigned char)((c & 31) * 255 / 31)}; fwrite(rgb, 1, 3, f); } } fclose(f); } }
+        tn++;
+      }
+    }
     videoFrame(i / 30.f);
     { static const char* vc = getenv("VIEWS"); if (vc) { int k = (int)(i / 30.f / atof(vc)); g_prog.view = (uint8_t)(k % 3); } }
     { static char last[64] = ""; if (msgT > 0 && strcmp(last, msgBuf)) { snprintf(last, sizeof last, "%s", msgBuf); printf("  [%5.1fs] %s / %s\n", i / 30.f, msgBuf, subBuf); } }
@@ -257,4 +310,5 @@ int main(int argc, char** argv) {
   }
   videoClose();
   printf("frames %d  mean %.2f ms  worst %.2f ms   top %.0f ft  top %.0f mph  crashes %d  miles %.2f\n", frames, rtot / frames, rmax, maxAlt * 3.28f, maxIas * 2.237f, nCrash, distance / 1609.f);
+  if (mantis::g_planeArtN) printf("aircraft drawing: %.1f us a draw (%d draws), %.1f%% of the frame\n", mantis::g_planeArtUs / mantis::g_planeArtN, mantis::g_planeArtN, 100.0 * mantis::g_planeArtUs / 1000.0 / rtot);
 }

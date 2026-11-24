@@ -1,6 +1,7 @@
 // Airfields (see airfield.h): placed by the seed, levelled by the land.
 #pragma GCC optimize("Os")
 #include "airfield.h"
+#include "mem.h"
 #include "terrain.h"
 #include "journey.h"
 #include "universe.h"
@@ -70,9 +71,10 @@ static bool airfieldMake(int i, int j, Airfield& a) {
 
 // the squares asked about lately, remembered (every baked cell asks about its own square)
 struct AtMemo { int i, j; bool ok, has; Airfield a; };
-static AtMemo s_at[32];
+static AtMemo* s_at = nullptr;                     // (PSRAM: 32 memos)
+static AtMemo* atMemo() { if (!s_at) { s_at = (AtMemo*)memSlow(32 * sizeof(AtMemo)); if (s_at) memset(s_at, 0, 32 * sizeof(AtMemo)); } return s_at; }
 bool airfieldAt(int i, int j, Airfield& a) {
-    AtMemo& m = s_at[((unsigned)i * 7u + (unsigned)j * 13u) & 31u];
+    AtMemo& m = atMemo()[((unsigned)i * 7u + (unsigned)j * 13u) & 31u];
     if (!m.ok || m.i != i || m.j != j) { m.i = i; m.j = j; m.ok = true; m.has = airfieldMake(i, j, m.a); }
     if (!m.has) { a.valid = false; return false; }
     a = m.a;
@@ -215,6 +217,6 @@ float airfieldShape(float x, float z, float h, uint8_t& mat, uint8_t& surf, uint
     return out;
 }
 
-void airfieldReset() { memset(s_lv, 0, sizeof s_lv); memset(s_at, 0, sizeof s_at); memset(s_cl, 0, sizeof s_cl); }
+void airfieldReset() { memset(s_lv, 0, sizeof s_lv); if (atMemo()) memset(s_at, 0, 32 * sizeof(AtMemo)); memset(s_cl, 0, sizeof s_cl); }
 
 }

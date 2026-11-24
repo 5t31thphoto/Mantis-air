@@ -6,6 +6,10 @@
 // (z-buffered: trees, airfields) -> reflections (water, wet runways) -> weather -> the aircraft or the cockpit ->
 // glass -> instruments.
 #include "render.h"
+#ifdef HOST
+#include <chrono>
+#endif
+#include "art_cards.h"
 #include "sprites.h"
 #include "terrain.h"
 #include "journey.h"
@@ -16,6 +20,7 @@
 #include "universe.h"
 #include "mem.h"
 #include "display.h"
+#include "cockpit.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -39,6 +44,7 @@
 namespace mantis {
 
 ViewInfo g_view;
+static uint8_t s_npcCol[16][2];            // the traffic/bogey livery: no entries of its own, matched into the palette
 
 static constexpr int W = FB_W, H = FB_H;
 static uint8_t fb[W * H];
@@ -92,7 +98,6 @@ static inline float fogAt(float d) { int i = (int)(d * 0.125f); return s_fog[i <
 static uint8_t s_veh = 0;
 static uint8_t s_bottom[W];                // rows at and below this are the cockpit's (not raycast)
 static uint8_t s_bottomCock[W];
-static constexpr int PANEL_Y = 88;         // the instrument panel's top row (cockpit view)
 static bool s_capWater = false;            // photo capture: mark the water pixels
 static uint8_t* s_wmask = nullptr;
 static float s_bob = 0.f;
@@ -193,6 +198,7 @@ static Ramp4 blendR(const Ramp4& a, const Ramp4& b, float t) { Ramp4 r; for (int
 static float s_night = 0.f, s_lights = 0.f, s_sunK = 1.f;
 static constexpr float HEAD_K = 1.15f;            // the headlights' strength on the ground and on what they light (1: as before)
 static float s_artLit[3] = {1.f, 1.f, 1.f};      // the scene's light on the hero art (photo mode)
+static CockpitLight s_cockLight = {{1.f, 1.f, 1.f}, 0.f};   // the cabin's light on the cockpit's art
 static float s_sunDx = 0.f, s_sunDy = 1.f, s_sunDz = 0.f;
 
 static void buildPalette() {
@@ -284,21 +290,25 @@ static void buildPalette() {
     // the aircraft's paint (until its sprite sheet arrives): body, trim and accent ramps of four, glass, dark metal,
     // the prop's blur. P_VEH + 0..3 body, 4..7 trim, 8..11 accent, 12..13 glass, 14 dark, 15 prop.
     {   const AircraftSpec& A = aircraftSpec(s_veh);
-        for (int r = 0; r < 3; r++) {
-            C3 v = c3(A.paint[r]);
-            for (int i = 0; i < 4; i++) {
-                const float t = 0.25f + i * 0.27f;
-                P[P_VEH + r * 4 + i] = add(scale(mul(v, amb), 0.45f + 0.35f * t), scale(mul(v, skyKey), t * t * 0.6f));
-            }
+        (void)A;
+        // the Mantis livery from the sprite sheet (15 colours): lit in P_VEH, shaded in P_COCK (whose cockpit
+        // colours are only wanted when the cockpit is on screen, when the aircraft's outside isn't)
+        for (int b = 1; b < 16; b++) {
+            const C3 v = {LIVERY16_MANTIS[b][0] * 1.25f, LIVERY16_MANTIS[b][1] * 1.25f, LIVERY16_MANTIS[b][2] * 1.25f};
+            P[P_VEH + b] = add(scale(mul(v, amb), 0.8f), scale(mul(v, skyKey), 0.55f));
         }
-        P[P_VEH + 12] = mix(scale(S.zen, 0.55f), C3{30, 40, 60}, 0.4f);
-        P[P_VEH + 13] = mix(S.hor, C3{220, 235, 255}, 0.35f);
-        P[P_VEH + 14] = scale(mul(C3{60, 62, 70}, amb), 0.7f);
-        P[P_VEH + 15] = mix(S.hor, C3{40, 40, 44}, 0.5f);
+        const bool cockpitShown = g_view.view == VIEW_COCKPIT && !g_view.photo;
+        if (!cockpitShown) for (int b = 1; b < 16; b++) {          // (no cockpit on screen: P_COCK is the shaded livery)
+            const C3 v = {LIVERY16_MANTIS[b][0] * 1.25f, LIVERY16_MANTIS[b][1] * 1.25f, LIVERY16_MANTIS[b][2] * 1.25f};
+            P[P_COCK + b] = add(scale(mul(v, amb), 0.75f), scale(mul(v, skyKey), 0.3f));   // (the art has its own shading: gentle)
+        }
         // the panel: lit by the cabin's light; the gauges glow at night
         C3 cab = add(scale(amb, 0.55f), scale(skyKey, 0.25f * (1.f - S.night)));
         const float glow = S.night;
+        for (int k = 0; k < 3; k++) s_cockLight.k[k] = clampf((&cab.r)[k] / 255.f * 1.5f, 0.16f, 1.1f);   // (midday: the art as drawn)
+        s_cockLight.night = glow;
         auto pan = [&](C3 c) { return add(scale(mul(c, cab), 0.9f), scale(C3{30, 22, 14}, glow * 0.3f)); };
+        if (cockpitShown) {
         P[P_COCK + 0] = pan(C3{34, 36, 42}); P[P_COCK + 1] = pan(C3{52, 54, 62}); P[P_COCK + 2] = pan(C3{72, 74, 84}); P[P_COCK + 3] = pan(C3{98, 100, 110});
         P[P_COCK + 4] = pan(C3{150, 150, 158});                                  // bezels
         P[P_COCK + 5] = C3{12, 13, 16};                                          // gauge faces
@@ -311,6 +321,7 @@ static void buildPalette() {
         P[P_COCK + 13] = add(scale(mul(paint, amb), 0.5f), scale(mul(paint, skyKey), 0.25f));   // the cowling
         P[P_COCK + 14] = add(scale(mul(paint, amb), 0.7f), scale(mul(paint, skyKey), 0.55f));
         P[P_COCK + 15] = pan(C3{16, 16, 20});                                    // the glare shield
+        }
     }
     // emissive
     P[P_HUD_W] = {242, 246, 250}; P[P_HUD_A] = {255, 190, 50}; P[P_HUD_R] = {255, 70, 60}; P[P_HUD_G] = {120, 255, 120};
@@ -337,6 +348,26 @@ static void buildPalette() {
         for (int i = P_VEH + 1; i < P_FLOWER + 8; i++) shoulder(P[i]);          // vehicle, cockpit, flowers
         for (int i = P_LINE_W; i <= P_SIGN_W; i++) shoulder(P[i]);             // paint and signs
         shoulder(P[P_MUD]);
+    }
+    // the other liveries (traffic, bogeys) have no entries of their own: each colour takes the nearest lit one
+    {   static uint8_t cand[80]; static int nc = 0;
+        if (!nc) {
+            for (int i = 0; i < 16; i++) { cand[nc++] = (uint8_t)(P_ROCK + i); cand[nc++] = (uint8_t)(P_ROAD + i); cand[nc++] = (uint8_t)(P_SOIL + i); }
+            for (int i = 0; i < 4; i++) { cand[nc++] = (uint8_t)(P_LINE_W + i); cand[nc++] = (uint8_t)(P_LINE_Y + i); }
+            for (int i = 0; i < 8; i++) cand[nc++] = (uint8_t)(P_BARK + i);
+            cand[nc++] = P_TAIL_D; cand[nc++] = P_TAIL; cand[nc++] = P_AMBER; cand[nc++] = P_BLACK; cand[nc++] = P_MUD;
+        }
+        for (int b = 1; b < 16; b++) for (int sh = 0; sh < 2; sh++) {
+            const C3 v = {LIVERY16_NPC[b][0] * 1.25f, LIVERY16_NPC[b][1] * 1.25f, LIVERY16_NPC[b][2] * 1.25f};
+            const C3 t = sh ? add(scale(mul(v, amb), 0.8f), scale(mul(v, skyKey), 0.55f)) : add(scale(mul(v, amb), 0.75f), scale(mul(v, skyKey), 0.3f));
+            float best = 1e30f; uint8_t bi = P_BLACK;
+            for (int q = 0; q < nc; q++) {
+                const C3& c = P[cand[q]];
+                const float dr = c.r - t.r, dg = c.g - t.g, db = c.b - t.b, d = dr * dr * 0.3f + dg * dg * 0.59f + db * db * 0.11f;
+                if (d < best) { best = d; bi = cand[q]; }
+            }
+            s_npcCol[b][sh] = bi;
+        }
     }
     // lightning lifts everything toward a cold white
     if (sc.flash > 0.01f) for (int i = 0; i < 232; i++) P[i] = mix(P[i], C3{225, 230, 255}, sc.flash * (i < P_GRASS ? 0.6f : 0.3f));
@@ -1162,7 +1193,11 @@ static void drawNight() {
     float n = s_night;
     if (n < 0.08f) return;
     uint32_t tw = (uint32_t)(s_t * 5.f);
-    static float starAz[STAR_N], starEl[STAR_N]; static uint8_t starB[STAR_N]; static bool made = false;
+    static float* starAz = nullptr; static float* starEl = nullptr; static uint8_t* starB = nullptr; static bool made = false;
+    if (!starAz) {                                       // (PSRAM: read once a frame at night, not worth internal RAM)
+        starAz = (float*)memSlow(STAR_N * sizeof(float)); starEl = (float*)memSlow(STAR_N * sizeof(float)); starB = (uint8_t*)memSlow(STAR_N);
+        if (!starAz || !starEl || !starB) return;
+    }
     if (!made) {
         for (int k = 0; k < STAR_N; k++) {
             uint32_t h = hash32((uint32_t)k * 2654435761u ^ 0x57A2u);
@@ -1745,6 +1780,7 @@ static void drawCritters() {
 
 static void drawParticles() {
     const Particle* p = fieldParticles();
+    if (!p) return;
     for (int k = 0; k < PART_N; k++) {
         if (p[k].life <= 0.f) continue;
         float sx, sy, d;
@@ -2039,123 +2075,324 @@ static void drawBirds() {
 }
 
 // ================================================================================== the aircraft (chase view, photos)
-// A low-poly model built from a few numbers per aircraft (until its sprite sheet arrives): fuselage stations, wing,
-// tail, floats or engine pods, struts and gear. Flat-shaded faces in the aircraft's own paint ramps, z-buffered
-// against the world, its shadow on the ground, nav lights and a prop that blurs.
+// The aircraft from the sprite sheets (drawPlaneArt: cards or textured meshes), its shadow on the ground, nav lights.
 Marker g_marks[MARK_N];
 int g_markN = 0;
-struct MTri { float a[3], b[3], c[3]; uint8_t ramp; bool two; };   // body coordinates: forward, up, right (m)
-static constexpr int MESH_MAX = 140;
-static MTri s_mesh[MESH_MAX];
-static int s_meshN = 0;
-struct MLine { float a[3], b[3]; uint8_t col; };
-static MLine s_mline[16]; static int s_mlineN = 0;
-static float s_propX = 0.f, s_propY = 0.f, s_propR = 0.f;
-static float s_tipX = 0.f, s_tipY = 0.f, s_tipZ = 0.f, s_tailX = 0.f, s_tailY = 0.f;
-enum : uint8_t { MR_BODY = 0, MR_TRIM, MR_ACCENT, MR_GLASS, MR_DARK };
-static void mTri(const float* a, const float* b, const float* c, uint8_t ramp, bool two, const float* inside) {
-    if (s_meshN >= MESH_MAX) return;
-    MTri& t = s_mesh[s_meshN++];
-    memcpy(t.a, a, 12); memcpy(t.b, b, 12); memcpy(t.c, c, 12); t.ramp = ramp; t.two = two;
-    if (inside && !two) {                                     // wind it so its normal points away from the inside
-        float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]}, e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
-        float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
-        float m[3] = {(a[0] + b[0] + c[0]) / 3.f - inside[0], (a[1] + b[1] + c[1]) / 3.f - inside[1], (a[2] + b[2] + c[2]) / 3.f - inside[2]};
-        if (n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0.f) { memcpy(t.b, c, 12); memcpy(t.c, b, 12); }
-    }
-}
-static void mQuad(const float* a, const float* b, const float* c, const float* d, uint8_t ramp, bool two, const float* inside) {
-    mTri(a, b, c, ramp, two, inside); mTri(a, c, d, ramp, two, inside);
-}
-// a section of the fuselage between two stations (x, half-width, half-height, centre height)
-static void mSection(float x0, float w0, float h0, float y0, float x1, float w1, float h1, float y1, uint8_t ramp, uint8_t top) {
-    const float in[3] = {(x0 + x1) * 0.5f, (y0 + y1) * 0.5f, 0.f};
-    float A[4][3] = {{x0, y0 + h0, -w0}, {x0, y0 + h0, w0}, {x0, y0 - h0, w0}, {x0, y0 - h0, -w0}};
-    float B[4][3] = {{x1, y1 + h1, -w1}, {x1, y1 + h1, w1}, {x1, y1 - h1, w1}, {x1, y1 - h1, -w1}};
-    for (int k = 0; k < 4; k++) {
-        const int n = (k + 1) & 3;
-        mQuad(A[k], A[n], B[n], B[k], k == 0 ? top : ramp, false, in);
-    }
-}
-static void mBox(float x, float y, float z, float lx, float ly, float lz, uint8_t ramp) {
-    mSection(x + lx, lz, ly, y, x - lx, lz, ly, y, ramp, ramp);
-    const float in[3] = {x, y, z};
-    float a[3] = {x + lx, y + ly, z - lz}, b[3] = {x + lx, y + ly, z + lz}, c[3] = {x + lx, y - ly, z + lz}, d[3] = {x + lx, y - ly, z - lz};
-    mQuad(a, b, c, d, ramp, false, in);
-}
-static void mShiftLast(int from, float dz) { for (int k = from; k < s_meshN; k++) { s_mesh[k].a[2] += dz; s_mesh[k].b[2] += dz; s_mesh[k].c[2] += dz; } }
-static void mPlate(float xf, float xb, float y, float z0, float z1, float rise, uint8_t ramp) {   // a wing panel, both sides
-    float a[3] = {xf, y, z0}, b[3] = {xf, y + rise, z1}, c[3] = {xb, y + rise, z1}, d[3] = {xb, y, z0};
-    mQuad(a, b, c, d, ramp, true, nullptr);
-}
-static void mLine(float ax, float ay, float az, float bx, float by, float bz, uint8_t col) {
-    if (s_mlineN >= 16) return;
-    MLine& l = s_mline[s_mlineN++];
-    l.a[0] = ax; l.a[1] = ay; l.a[2] = az; l.b[0] = bx; l.b[1] = by; l.b[2] = bz; l.col = col;
-}
-static void buildMesh(uint8_t id) {
-    s_meshN = 0; s_mlineN = 0;
-    const AircraftSpec& A = aircraftSpec(id);
-    struct Geo { float len, w, h, wingX, wingY, chord, span, finH, stab; bool high; };
-    static const Geo G[A_COUNT] = {
-        {6.8f, 0.38f, 0.55f, 0.55f, 0.78f, 1.6f, 10.7f, 1.3f, 3.0f, true},
-        {9.2f, 0.62f, 0.78f, 0.9f, 1.05f, 1.9f, 14.6f, 1.8f, 4.6f, true},
-        {10.5f, 0.72f, 0.78f, -0.6f, -0.45f, 2.0f, 12.0f, 2.0f, 4.4f, false},
-        {15.0f, 0.75f, 0.85f, -1.8f, -0.15f, 4.2f, 10.0f, 2.4f, 5.4f, false},
-    };
-    const Geo& g = G[id % A_COUNT];
-    const float L = g.len, xn = L * 0.45f, xf = L * 0.28f, xr = -L * 0.08f, xt = -L * 0.55f;
-    const bool jet = A.vProp <= 0.f;
-    // fuselage: nose (cowling or radome), cabin (glass on top), tail cone
-    mSection(xn, g.w * (jet ? 0.18f : 0.62f), g.h * (jet ? 0.22f : 0.62f), jet ? -0.1f : -0.05f, xf, g.w, g.h, 0.f, jet ? MR_BODY : MR_TRIM, jet ? MR_BODY : MR_TRIM);
-    mSection(xf, g.w, g.h, 0.f, xr, g.w, g.h, 0.f, MR_BODY, MR_GLASS);
-    mSection(xr, g.w, g.h, 0.f, xt, g.w * 0.16f, g.h * 0.28f, g.h * 0.32f, MR_BODY, MR_BODY);
-    {   const float in[3] = {xn - 0.5f, 0.f, 0.f};            // the nose cap (spinner)
-        const float w = g.w * (jet ? 0.18f : 0.62f), h = g.h * (jet ? 0.22f : 0.62f), y = jet ? -0.1f : -0.05f;
-        float a[3] = {xn, y + h, -w}, b[3] = {xn, y + h, w}, c[3] = {xn, y - h, w}, d[3] = {xn, y - h, -w};
-        mQuad(a, b, c, d, jet ? MR_BODY : MR_DARK, false, in);
-    }
-    // wings: inner panels in the body colour, tips in the accent
-    const float wx0 = g.wingX + g.chord * 0.5f, wx1 = g.wingX - g.chord * 0.5f, semi = g.span * 0.5f;
-    const float dih = g.high ? 0.f : semi * 0.06f;
-    for (int sd = -1; sd <= 1; sd += 2) {
-        mPlate(wx0, wx1, g.wingY, sd * g.w * 0.9f, sd * semi * 0.8f, dih * 0.8f, MR_BODY);
-        mPlate(wx0 - 0.15f, wx1, g.wingY + dih * 0.8f, sd * semi * 0.8f, sd * semi, dih * 0.2f, MR_ACCENT);
-    }
-    s_tipX = g.wingX; s_tipY = g.wingY + dih; s_tipZ = semi;
-    // tail: the stabiliser (a T-tail on the jet) and the fin
-    const float ty = id == A_JET ? g.h * 0.32f + g.finH : g.h * 0.3f, sc = L * 0.13f;
-    for (int sd = -1; sd <= 1; sd += 2) mPlate(xt + sc * 1.2f, xt + 0.1f, ty, 0.f, sd * g.stab * 0.5f, 0.f, MR_BODY);
-    {   float a[3] = {xt + sc * 1.6f, g.h * 0.3f, 0.f}, b[3] = {xt, g.h * 0.3f, 0.f}, c[3] = {xt + 0.15f, g.h * 0.3f + g.finH, 0.f};
-        mTri(a, b, c, MR_ACCENT, true, nullptr); }
-    s_tailX = xt; s_tailY = g.h * 0.3f + g.finH;
-    if (A.gear == GEAR_FLOATS) {                               // two floats and their struts
-        for (int sd = -1; sd <= 1; sd += 2) {
-            const int from = s_meshN;
-            mBox(0.2f, -A.gearH + 0.32f, 0.f, L * 0.42f, 0.3f, 0.28f, MR_TRIM);
-            mShiftLast(from, sd * 1.35f);
-            mLine(xf - 0.2f, -g.h, sd * g.w, xf - 0.2f, -A.gearH + 0.6f, sd * 1.35f, P_VEH + 14);
-            mLine(xr, -g.h, sd * g.w, xr, -A.gearH + 0.6f, sd * 1.35f, P_VEH + 14);
-        }
-    } else if (!A.retract) {                                   // fixed gear: legs and wheels (spats on the racer)
-        for (int sd = -1; sd <= 1; sd += 2) {
-            const int from = s_meshN;
-            mBox(xf - 0.3f, -A.gearH + 0.3f, 0.f, 0.3f, 0.3f, 0.1f, MR_DARK);
-            mShiftLast(from, sd * 0.95f);
-            mLine(xf - 0.3f, -g.h, sd * g.w * 0.8f, xf - 0.3f, -A.gearH + 0.35f, sd * 0.95f, P_VEH + 14);
-        }
-        if (A.gear == GEAR_TAIL) mLine(xt + 0.4f, -g.h * 0.2f, 0.f, xt + 0.3f, -A.gearH * 0.45f, 0.f, P_VEH + 14);
-    }
-    if (g.high) for (int sd = -1; sd <= 1; sd += 2)            // wing struts
-        mLine(g.wingX, -g.h * 0.7f, sd * g.w, g.wingX, g.wingY, sd * semi * 0.32f, P_VEH + 14);
-    if (id == A_JET) for (int sd = -1; sd <= 1; sd += 2) {      // engine pods on the rear fuselage
-        const int from = s_meshN;
-        mBox(-L * 0.28f, g.h * 0.45f, 0.f, 1.2f, 0.38f, 0.38f, MR_TRIM);
-        mShiftLast(from, sd * (g.w + 0.45f));
-    }
-    s_propX = xn + 0.05f; s_propY = jet ? 0.f : -0.05f; s_propR = jet ? 0.f : (id == A_BEAVER ? 1.35f : 0.95f);
-}
 
+// ---- the aircraft: the sprite sheets' views as cards in the aircraft's frame (art_cards.h). Every card the camera
+// doesn't see nearly edge-on is drawn, whole, and they cut through each other in depth: straight on it is the sprite
+// itself, at 45 degrees the wing card and the fuselage card make the shape together. Drawn through texTri:
+// perspective-correct, depth-tested against the world (its 8-bit codes) and the aircraft itself (its own 16-bit
+// depth), and then the silhouette gets the pixel art's dark outline.
+static const PlaneArt* const CARDS[8] = {&PLANE_CUB, &PLANE_BEAVER, &PLANE_JET, &PLANE_FIGHTER,
+                                         &PLANE_NPC_CUB, &PLANE_NPC_BEAVER, &PLANE_NPC_JET, &PLANE_NPC_FIGHTER};
+static uint16_t* s_acZ = nullptr;          // the aircraft's own depth (valid where s_acSt == s_acId)
+static uint8_t* s_acSt = nullptr;
+static uint8_t s_acId = 0;
+static int s_acX0, s_acY0, s_acX1, s_acY1;  // what this aircraft drew (for the outline)
+static uint8_t s_acZcN, s_acZcF;           // the world depth codes it sits between (outside: no per-pixel test)
+// an 8x8 ordered-dither threshold (0..255): the cross-fade between cards
+static const uint8_t s_bayer8[64] = {
+      0, 128,  32, 160,   8, 136,  40, 168, 192,  64, 224,  96, 200,  72, 232, 104,
+     48, 176,  16, 144,  56, 184,  24, 152, 240, 112, 208,  80, 248, 120, 216,  88,
+     12, 140,  44, 172,   4, 132,  36, 164, 204,  76, 236, 108, 196,  68, 228, 100,
+     60, 188,  28, 156,  52, 180,  20, 148, 252, 124, 220,  92, 244, 116, 212,  84};
+
+struct TexRef { const uint8_t* px; int w, h, stride; };    // 4 bits a texel, 0 transparent
+struct TV { float x, y, iw, uw, vw; };                       // on screen; 1/depth; u/depth, v/depth (texels)
+struct TriStyle { const uint8_t* lut; uint8_t dLo, dHi; const uint8_t (*skip)[4]; int nSkip; };   // colours; dither band; gear boxes
+static inline uint8_t texel(const TexRef& t, int u, int v) {
+    const uint8_t b = t.px[v * t.stride + (u >> 1)];
+    return (u & 1) ? (b & 15) : (b >> 4);
+}
+static bool acBegin() {
+    if (!s_acZ) { s_acZ = (uint16_t*)memSlow(W * H * 2); s_acSt = (uint8_t*)memSlow(W * H); if (s_acSt) memset(s_acSt, 0, W * H); }
+    if (!s_acZ || !s_acSt) return false;
+    if (++s_acId == 0) { memset(s_acSt, 0, W * H); s_acId = 1; }
+    s_acX0 = W; s_acY0 = H; s_acX1 = -1; s_acY1 = -1;
+    return true;
+}
+// one textured triangle (screen-space, perspective-correct)
+static void texTri(const TV& A, const TV& B, const TV& C, const TexRef& t, const TriStyle& st) {
+    const float area = (B.x - A.x) * (C.y - A.y) - (B.y - A.y) * (C.x - A.x);
+    if (fabsf(area) < 0.05f) return;
+    const float ia = 1.f / area;
+    int x0 = (int)floorf(fminf(A.x, fminf(B.x, C.x))), x1 = (int)ceilf(fmaxf(A.x, fmaxf(B.x, C.x)));
+    int y0 = (int)floorf(fminf(A.y, fminf(B.y, C.y))), y1 = (int)ceilf(fmaxf(A.y, fmaxf(B.y, C.y)));
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > W - 1) x1 = W - 1;
+    if (y1 > H - 1) y1 = H - 1;
+    if (x0 > x1 || y0 > y1) return;
+    for (int y = y0; y <= y1; y++) {
+        const float py = y + 0.5f;
+        for (int x = x0; x <= x1; x++) {
+            const float px = x + 0.5f;
+            float w0 = ((B.x - px) * (C.y - py) - (B.y - py) * (C.x - px)) * ia;
+            float w1 = ((C.x - px) * (A.y - py) - (C.y - py) * (A.x - px)) * ia;
+            const float w2 = 1.f - w0 - w1;
+            if (w0 < 0.f || w1 < 0.f || w2 < 0.f) continue;
+            if (y >= s_bottom[x]) continue;                         // (the panel)
+            if (st.dHi != 255 || st.dLo != 0) { const uint8_t d = s_bayer8[(y & 7) * 8 + (x & 7)]; if (d < st.dLo || d >= st.dHi) continue; }
+            const float iw = A.iw * w0 + B.iw * w1 + C.iw * w2;
+            const float dep = 1.f / iw;
+            const int u = (int)((A.uw * w0 + B.uw * w1 + C.uw * w2) * dep), v = (int)((A.vw * w0 + B.vw * w1 + C.vw * w2) * dep);
+            if ((unsigned)u >= (unsigned)t.w || (unsigned)v >= (unsigned)t.h) continue;
+            bool hid = false;
+            for (int g = 0; g < st.nSkip; g++) if (u >= st.skip[g][0] && v >= st.skip[g][1] && u < st.skip[g][2] && v < st.skip[g][3]) { hid = true; break; }
+            if (hid) continue;
+            const uint8_t c = texel(t, u, v);
+            if (!c) continue;
+            const int pi = y * W + x;
+            const uint16_t dz = (uint16_t)fminf(dep * 64.f, 65535.f);
+            if (s_acSt[pi] == s_acId) { if (s_acZ[pi] <= dz) continue; }
+            else {
+                const uint8_t wz = zb[pi] & ~1;
+                if (wz <= s_acZcN) continue;                        // the world in front of all of it
+                if (wz < s_acZcF && wz <= zcode(dep)) continue;
+            }
+            fb[pi] = st.lut[c]; s_acZ[pi] = dz; s_acSt[pi] = s_acId;
+            if (x < s_acX0) s_acX0 = x;
+            if (x > s_acX1) s_acX1 = x;
+            if (y < s_acY0) s_acY0 = y;
+            if (y > s_acY1) s_acY1 = y;
+        }
+    }
+}
+// the end of an aircraft: its pixels into the world's depth, and the dark outline round its silhouette
+static void acEnd(float dc, uint8_t ink) {
+    if (s_acX1 < 0) return;
+    const uint8_t zcm = zcode(fmaxf(dc, 0.3f));
+    for (int y = s_acY0; y <= s_acY1; y++) for (int x = s_acX0; x <= s_acX1; x++) { const int pi = y * W + x; if (s_acSt[pi] == s_acId) zb[pi] = (uint8_t)((zb[pi] & 1) | zcm); }
+    const int ox0 = s_acX0 > 0 ? s_acX0 - 1 : 0, oy0 = s_acY0 > 0 ? s_acY0 - 1 : 0, ox1 = s_acX1 < W - 1 ? s_acX1 + 1 : W - 1, oy1 = s_acY1 < H - 1 ? s_acY1 + 1 : H - 1;
+    for (int y = oy0; y <= oy1; y++) for (int x = ox0; x <= ox1; x++) {
+        const int pi = y * W + x;
+        if (s_acSt[pi] == s_acId || (zb[pi] & ~1) <= zcm || y >= s_bottom[x]) continue;
+        if ((x > 0 && s_acSt[pi - 1] == s_acId) || (x < W - 1 && s_acSt[pi + 1] == s_acId) || (y > 0 && s_acSt[pi - W] == s_acId) || (y < H - 1 && s_acSt[pi + W] == s_acId)) fb[pi] = ink;
+    }
+}
+// a body-frame point (forward, up, right; metres) to the screen: false if behind the camera
+struct ACPose { float x, y, z, f[3], u[3], r[3]; };
+static inline bool acProject(const ACPose& P, float bf, float bu, float br, TV& o) {
+    const float wx = P.x + P.f[0] * bf + P.u[0] * bu + P.r[0] * br, wy = P.y + P.f[1] * bf + P.u[1] * bu + P.r[1] * br, wz = P.z + P.f[2] * bf + P.u[2] * bu + P.r[2] * br;
+    const float dx = wx - cx, dz = wz - cz, dep = dx * fx + dz * fz;
+    if (dep < 0.3f) return false;
+    const float iw = 1.f / dep;
+    o.x = W * 0.5f + (dx * rx + dz * rz) * iw * F;
+    o.y = hor0 + (o.x - W * 0.5f) * rollT - (wy - cy) * iw * F;
+    o.iw = iw;
+    return true;
+}
+// the palette for one livery: lit or shaded (shade: P_COCK's entries, free whenever the cockpit isn't on screen)
+static uint8_t s_lutLit[16], s_lutShade[16], s_lutNpcLit[16], s_lutNpcShade[16];
+static void acLuts() {
+    for (int i = 0; i < 16; i++) {
+        s_lutLit[i] = (uint8_t)(P_VEH + i); s_lutShade[i] = (uint8_t)(P_COCK + i);
+        s_lutNpcLit[i] = s_npcCol[i][1]; s_lutNpcShade[i] = s_npcCol[i][0];
+    }
+}
+// the cards: the one(s) the camera faces, as quads in the aircraft's frame
+static void drawCards(const PlaneArt& A, const ACPose& P, float span, float upBase, bool gearDown, bool npc, float rpm01) {
+    const float L = A.len * span, Hh = A.hgt * span, S = span;
+    const float mid = upBase + Hh * 0.5f;                        // (the cards' middle: half way up from the wheels)
+    // where the camera looks from, in the aircraft's frame
+    const float mx = P.x + P.u[0] * mid, my = P.y + P.u[1] * mid, mz = P.z + P.u[2] * mid;
+    const float vx = mx - cx, vy = my - cy, vz = mz - cz, vl = sqrtf(vx * vx + vy * vy + vz * vz) + 1e-3f;
+    const float bf = (vx * P.f[0] + vy * P.f[1] + vz * P.f[2]) / vl, bu = (vx * P.u[0] + vy * P.u[1] + vz * P.u[2]) / vl, br = (vx * P.r[0] + vy * P.r[1] + vz * P.r[2]) / vl;
+    // every card not seen nearly edge-on is drawn, whole, and they cut through each other in depth (a cross): at
+    // 45 degrees the wing card and the fuselage card make the shape together instead of a dithered blend
+    const float wT = fabsf(bu) > 0.22f ? 1.f : 0.f, wS = fabsf(br) > 0.22f ? 1.f : 0.f, wF = fabsf(bf) > 0.22f ? 1.f : 0.f;
+    const float dc = (mx - cx) * fx + (mz - cz) * fz;
+    const float rad = fmaxf(L, S) * 0.6f;
+    if (dc < rad * 0.35f || dc > 7000.f) return;
+    s_acZcN = zcode(fmaxf(dc - rad, 0.3f)); s_acZcF = zcode(dc + rad);
+    const float pxPerM = F / dc;
+    // each card: its corners (body frame), its texture, its light
+    struct Q { const Card* c; float o[3], ax[3], ay[3]; float w; uint8_t lo, hi; bool lit; };
+    Q q[3]; int nq = 0;
+    auto litOf = [&](float nf, float nu, float nr) {
+        const float n0 = P.f[0] * nf + P.u[0] * nu + P.r[0] * nr, n1 = P.f[1] * nf + P.u[1] * nu + P.r[1] * nr, n2 = P.f[2] * nf + P.u[2] * nu + P.r[2] * nr;
+        return (n0 * s_sunDx + n1 * s_sunDy + n2 * s_sunDz) * s_sunK + n1 * 0.3f > 0.05f;
+    };
+    // top: on the wing plane, nose at the top row, the right wing on the right
+    if (wT > 0.004f) { Q& c = q[nq++]; c.c = &A.top; c.o[0] = L * 0.5f; c.o[1] = mid; c.o[2] = -S * 0.5f;
+        c.ax[0] = 0; c.ax[1] = 0; c.ax[2] = S; c.ay[0] = -L; c.ay[1] = 0; c.ay[2] = 0; c.w = S; c.lo = 0; c.hi = 255; c.lit = bu < 0.f && litOf(0, 1, 0); }
+    // side: on the centre plane, nose at the left, rows down
+    if (wS > 0.004f) { Q& c = q[nq++]; c.c = &A.side; c.o[0] = L * 0.5f; c.o[1] = upBase + Hh; c.o[2] = 0.f;
+        c.ax[0] = -L; c.ax[1] = 0; c.ax[2] = 0; c.ay[0] = 0; c.ay[1] = -Hh; c.ay[2] = 0; c.w = L; c.lo = 0; c.hi = 255; c.lit = litOf(0, 0, br < 0.f ? 1.f : -1.f); }
+    // front (from ahead: the left wing on the right) or rear (from behind: the right wing on the right)
+    if (wF > 0.004f) { Q& c = q[nq++];
+        // from behind its rear view, from ahead its front; where one isn't drawn, the other from its back (mirrored)
+        const bool rear = bf > 0.f ? A.rear.w[0] != 0 : A.front.w[0] == 0;
+        c.c = rear ? &A.rear : &A.front;
+        c.o[0] = 0.f; c.o[1] = upBase + Hh; c.o[2] = rear ? -S * 0.5f : S * 0.5f;
+        c.ax[0] = 0; c.ax[1] = 0; c.ax[2] = rear ? S : -S; c.ay[0] = 0; c.ay[1] = -Hh; c.ay[2] = 0; c.w = S; c.lo = 0; c.hi = 255;
+        c.lit = litOf(bf < 0.f ? 1.f : -1.f, 0, 0); }
+    for (int k = 0; k < nq; k++) {
+        const Q& c = q[k];
+        // the mip: about a texel a pixel
+        const float px = c.w * pxPerM;
+        int mip = 0;
+        while (mip < 2 && c.c->w[mip + 1] >= px) mip++;
+        TexRef t = {c.c->px + c.c->off[mip], c.c->w[mip], c.c->h[mip], (c.c->w[mip] + 1) >> 1};
+        uint8_t skipBox[3][4]; int nSkip = 0;
+        if (!gearDown) for (int g = 0; g < c.c->nGear; g++, nSkip++) {      // (gear boxes: mip-0 texels -> this mip's)
+            skipBox[nSkip][0] = (uint8_t)(c.c->gear[g][0] * t.w / c.c->w[0]); skipBox[nSkip][2] = (uint8_t)((c.c->gear[g][2] * t.w + c.c->w[0] - 1) / c.c->w[0]);
+            skipBox[nSkip][1] = (uint8_t)(c.c->gear[g][1] * t.h / c.c->h[0]); skipBox[nSkip][3] = (uint8_t)((c.c->gear[g][3] * t.h + c.c->h[0] - 1) / c.c->h[0]);
+        }
+        TriStyle st = {c.lit ? (npc ? s_lutNpcLit : s_lutLit) : (npc ? s_lutNpcShade : s_lutShade), c.lo, (uint8_t)c.hi, skipBox, nSkip};
+        if (c.hi == 255) st.dHi = 255;
+        TV v[4]; bool ok = true;
+        const float cu[4] = {0, 1, 1, 0}, cv[4] = {0, 0, 1, 1};
+        for (int e = 0; e < 4 && ok; e++) {
+            ok = acProject(P, c.o[0] + c.ax[0] * cu[e] + c.ay[0] * cv[e], c.o[1] + c.ax[1] * cu[e] + c.ay[1] * cv[e], c.o[2] + c.ax[2] * cu[e] + c.ay[2] * cv[e], v[e]);
+            v[e].uw = cu[e] * t.w * v[e].iw; v[e].vw = cv[e] * t.h * v[e].iw;
+        }
+        if (!ok) continue;
+        texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
+    }
+    // the props (the parts column's sprites, face on): a quad at each hub across the flight line, turning. Its blades
+    // at idle; spun up, its blur disc at half density (see-through). In depth with the cards, so a wing hides them.
+    if (A.nProp && A.blade && A.disc) {
+        const bool blur = rpm01 > 0.35f;
+        const Card& pc = blur ? *A.disc : *A.blade;
+        const float spin = blur ? s_t * 2.5f : s_t * (1.f + rpm01 * 30.f);
+        for (int p = 0; p < A.nProp; p++) {
+            const float hf = A.prop[p][0] * L, hr = A.prop[p][1] * S, hu = upBase + A.prop[p][2] * Hh, R = A.prop[p][3] * S;
+            const float a = spin + p * 1.1f, ca = cosf(a), sa = sinf(a);
+            // the quad's corners in the body frame (in the right-up plane), rotated by the spin
+            const float e1r = ca * R, e1u = sa * R, e2r = -sa * R, e2u = ca * R;
+            const float cr[4] = {-e1r + e2r, e1r + e2r, e1r - e2r, -e1r - e2r}, cu[4] = {-e1u + e2u, e1u + e2u, e1u - e2u, -e1u - e2u};
+            int mip = 0;
+            while (mip < 2 && pc.w[mip + 1] >= 2.f * R * pxPerM) mip++;
+            TexRef t = {pc.px + pc.off[mip], pc.w[mip], pc.h[mip], (pc.w[mip] + 1) >> 1};
+            TV v[4]; bool ok = true;
+            const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
+            for (int e = 0; e < 4 && ok; e++) {
+                ok = acProject(P, hf, hu + cu[e], hr + cr[e], v[e]);
+                v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
+            }
+            if (!ok) continue;
+            TriStyle st = {npc ? s_lutNpcLit : s_lutLit, 0, (uint8_t)(blur ? 128 : 255), nullptr, 0};
+            if (!blur) st.dHi = 255;
+            texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
+        }
+    }
+    // the afterburners (the parts column's flame and its glow, in colours that glow): open past 70% throttle, the
+    // flame as two crossed cards trailing from each nozzle (it reads from the side and from above), the glow facing
+    // aft (what you see from behind); flickering
+    if (A.nNozzle && A.flame && A.glow && rpm01 > 0.7f) {
+        static const uint8_t FL[16] = FLAME_LUT_INIT;
+        const float k = (rpm01 - 0.7f) / 0.3f;
+        for (int n = 0; n < A.nNozzle; n++) {
+            const float nf = -L * 0.5f, nr = A.nozzle[n][1] * 0.f + A.nozzle[n][0] * S, nu = upBase + A.nozzle[n][1] * Hh;
+            const float flick = 0.85f + 0.3f * hashf((uint32_t)(s_t * 30.f) * 7u + n);
+            // seen end-on from behind, a trailing card would come at the camera as a slab: there the glow carries it
+            // and the flame shortens away (fully gone looking straight up the pipe)
+            const float endOn = fminf(1.f, fmaxf(0.f, (0.92f - bf) / 0.3f));
+            const float len = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * (bf > 0.f ? endOn : 1.f);
+            const float hh = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * A.flame->h[0] / A.flame->w[0] * 0.5f;
+            TriStyle st = {FL, 0, 255, nullptr, 0};
+            for (int c = 0; c < 3; c++) {
+                if (c == 0 && (fabsf(br) < 0.22f || len < 0.3f)) continue;     // edge-on, or too short to show
+                if (c == 1 && (fabsf(bu) < 0.22f || len < 0.3f)) continue;
+                if (c == 2 && bf < 0.15f) continue;                              // the glow faces aft
+                const Card& cd = c < 2 ? *A.flame : *A.glow;
+                int mip = 0;
+                const float sz = c < 2 ? len : hh * 2.4f;
+                while (mip < 2 && cd.w[mip + 1] >= sz * pxPerM) mip++;
+                TexRef t = {cd.px + cd.off[mip], cd.w[mip], cd.h[mip], (cd.w[mip] + 1) >> 1};
+                // corners (forward, up, right): c 0 side card (forward-up), 1 top card (forward-right), 2 the glow
+                float cf[4], cu2[4], cr2[4];
+                if (c == 0) { const float f_[4] = {nf, nf - len, nf - len, nf}, u_[4] = {nu + hh, nu + hh, nu - hh, nu - hh};
+                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = u_[e]; cr2[e] = nr; } }
+                else if (c == 1) { const float f_[4] = {nf, nf - len, nf - len, nf}, r_[4] = {nr - hh, nr - hh, nr + hh, nr + hh};
+                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = nu; cr2[e] = r_[e]; } }
+                else {  // the glow sits on the nozzle as the rear card draws it: that card stands at the body's middle, so
+                        // straight from behind the glow goes there, sliding back to the tail as the view turns side-on
+                       const float gf = -L * 0.5f * fminf(1.f, fmaxf(0.f, (0.95f - bf) / 0.6f)) - 0.05f;
+                       const float g = hh * 0.6f, u_[4] = {nu + g, nu + g, nu - g, nu - g}, r_[4] = {nr - g, nr + g, nr + g, nr - g};
+                       for (int e = 0; e < 4; e++) { cf[e] = gf; cu2[e] = u_[e]; cr2[e] = r_[e]; } }
+                TV v[4]; bool ok = true;
+                const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
+                for (int e = 0; e < 4 && ok; e++) {
+                    ok = acProject(P, cf[e], cu2[e], cr2[e], v[e]);
+                    v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
+                }
+                if (!ok) continue;
+                texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
+            }
+        }
+    }
+}
+// one aircraft
+#ifdef HOST
+double g_planeArtUs = 0.0; int g_planeArtN = 0;          // (host: time spent drawing aircraft, for comparing methods)
+#endif
+static void drawPlaneArtImpl(int art, const ACPose& P, float span, float upBase, bool gearDown, float rpm01);
+static void drawPlaneArt(int art, const ACPose& P, float span, float upBase, bool gearDown, float rpm01 = 1.f) {
+#ifdef HOST
+    auto t0 = std::chrono::high_resolution_clock::now();
+    drawPlaneArtImpl(art, P, span, upBase, gearDown, rpm01);
+    g_planeArtUs += std::chrono::duration<double, std::micro>(std::chrono::high_resolution_clock::now() - t0).count(); g_planeArtN++;
+#else
+    drawPlaneArtImpl(art, P, span, upBase, gearDown, rpm01);
+#endif
+}
+static void drawPlaneArtImpl(int art, const ACPose& P, float span, float upBase, bool gearDown, float rpm01) {
+    const bool npc = art >= 4;
+    if (!acBegin()) return;
+    acLuts();
+    drawCards(*CARDS[art & 7], P, span, upBase, gearDown, npc, rpm01);
+    acEnd((P.x - cx) * fx + (P.z - cz) * fz, npc ? s_npcCol[1][0] : (uint8_t)(P_VEH + 1));
+}
+#ifdef HOST
+// (host only, for judging the aircraft: one on a blank screen from an exact camera, by either method; a PPM)
+void renderDebugPlane(int art, int mode, float yawDeg, float pitchDeg, float rollDeg, float camAz, float camEl, float dist, const char* path) {
+    static const float SPAN[4] = {10.7f, 14.6f, 12.f, 10.f};
+    const float ya = yawDeg * 0.0174533f, pa = pitchDeg * 0.0174533f, ra = rollDeg * 0.0174533f;
+    float f[3] = {cosf(ya) * cosf(pa), sinf(pa), sinf(ya) * cosf(pa)};
+    float r0[3] = {-sinf(ya), 0.f, cosf(ya)}, u0[3] = {-cosf(ya) * sinf(pa), cosf(pa), -sinf(ya) * sinf(pa)};
+    const float az = camAz * 0.0174533f, el = camEl * 0.0174533f;
+    cx = cosf(az) * cosf(el) * dist; cz = sinf(az) * cosf(el) * dist; cy = 100.f + sinf(el) * dist;
+    cyaw = atan2f(-cz, -cx); fx = cosf(cyaw); fz = sinf(cyaw); rx = -fz; rz = fx;
+    F = W * 0.5f / tanf(0.5f * 1.05f); rollT = 0.f;
+    hor0 = H * 0.5f - tanf(el) * F;
+    if (!zb) zb = (uint8_t*)memFast(W * H);
+    memset(fb, P_SIGN_W, W * H); memset(zb, 254, W * H);
+    for (int x = 0; x < W; x++) s_bottom[x] = H;
+    const uint8_t (*liv)[3] = art >= 4 ? LIVERY16_NPC : LIVERY16_MANTIS;
+    for (int b = 0; b < 16; b++) for (int c = 0; c < 3; c++) {
+        palRGB[(P_VEH + b) * 3 + c] = (uint8_t)fminf(255.f, liv[b][c] * 1.2f);
+        palRGB[(P_COCK + b) * 3 + c] = (uint8_t)(liv[b][c] * 0.8f);
+    }
+    for (int b = 0; b < 16; b++) { s_npcCol[b][1] = (uint8_t)(P_VEH + b); s_npcCol[b][0] = (uint8_t)(P_COCK + b); }
+    palRGB[P_SIGN_W * 3] = 225; palRGB[P_SIGN_W * 3 + 1] = 230; palRGB[P_SIGN_W * 3 + 2] = 236;   // (the backdrop)
+    {   // the glowing entries, as the game's palette has them
+        static const struct { int i; uint8_t c[3]; } E[] = {{P_HUD_W, {242, 246, 250}}, {P_FIREFLY, {225, 255, 130}}, {P_HUD_G, {120, 255, 120}},
+            {P_HUD_A, {255, 190, 50}}, {P_AMBER, {255, 170, 40}}, {P_HUD_R, {255, 70, 60}}, {P_TAIL, {255, 40, 40}}, {P_TAIL_D, {120, 16, 24}}};
+        for (const auto& e : E) for (int c = 0; c < 3; c++) palRGB[e.i * 3 + c] = e.c[c];
+    }
+    s_sunDx = -0.5f; s_sunDy = 0.75f; s_sunDz = -0.43f; s_sunK = 1.f;
+    ACPose P; P.x = 0.f; P.y = 100.f; P.z = 0.f;
+    for (int a = 0; a < 3; a++) { P.f[a] = f[a]; P.u[a] = u0[a] * cosf(ra) + r0[a] * sinf(ra); P.r[a] = r0[a] * cosf(ra) - u0[a] * sinf(ra); }
+    const float span = SPAN[art & 3];
+    drawPlaneArt(art, P, span, -CARDS[art & 7]->hgt * span * 0.5f, true, mode / 100.f);   // (mode: the engine's rpm, percent)
+    if (!path) return;
+    FILE* fp = fopen(path, "wb"); if (!fp) return;
+    fprintf(fp, "P6 %d %d 255\n", W, H);
+    for (int i = 0; i < W * H; i++) fwrite(&palRGB[fb[i] * 3], 1, 3, fp);
+    fclose(fp);
+}
+#endif
+// nav lights and the like: the wingtips and the fin's top, from the cards' size
+static float s_tipX = 0.f, s_tipY = 0.f, s_tipZ = 0.f, s_tailX = 0.f, s_tailY = 0.f;
+static void planeFit(uint8_t id) {
+    const PlaneArt& A = *CARDS[id % A_COUNT];
+    const AircraftSpec& S = aircraftSpec(id);
+    s_tipX = 0.f; s_tipY = -S.gearH + A.hgt * S.span * 0.5f; s_tipZ = S.span * 0.5f;
+    s_tailX = -A.len * S.span * 0.5f; s_tailY = -S.gearH + A.hgt * S.span;
+}
 static inline void bodyToWorld(const ViewInfo& v, const float* p, float& x, float& y, float& z) {
     x = v.x + v.fx * p[0] + v.ux * p[1] + v.rx * p[2];
     y = v.y + v.fy * p[0] + v.uy * p[1] + v.ry * p[2];
@@ -2189,46 +2426,13 @@ static void drawAircraft() {
         const float sxw = v.x - cosf(g_scene.sunAz) * off, szw = v.z - sinf(g_scene.sunAz) * off;
         drawShadowAt(sxw, szw, terrainHeight(sxw, szw) + 0.1f, aircraftSpec(v.aircraft).span * 0.45f);
     }
-    const float sun[3] = {s_sunDx, s_sunDy, s_sunDz};
-    for (int k = 0; k < s_meshN; k++) {
-        const MTri& t = s_mesh[k];
-        if (t.ramp == MR_GLASS && false) continue;
-        float P[3][3];
-        bodyToWorld(v, t.a, P[0][0], P[0][1], P[0][2]); bodyToWorld(v, t.b, P[1][0], P[1][1], P[1][2]); bodyToWorld(v, t.c, P[2][0], P[2][1], P[2][2]);
-        const float e1[3] = {P[1][0] - P[0][0], P[1][1] - P[0][1], P[1][2] - P[0][2]}, e2[3] = {P[2][0] - P[0][0], P[2][1] - P[0][1], P[2][2] - P[0][2]};
-        float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
-        const float nl = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-        if (nl < 1e-6f) continue;
-        n[0] /= nl; n[1] /= nl; n[2] /= nl;
-        const float view = n[0] * (P[0][0] - cx) + n[1] * (P[0][1] - cy) + n[2] * (P[0][2] - cz);
-        if (!t.two && view >= 0.f) continue;                   // its back
-        if (t.two && view > 0.f) { n[0] = -n[0]; n[1] = -n[1]; n[2] = -n[2]; }
-        const float lit = fmaxf(0.f, n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2]) * s_sunK;
-        uint8_t col;
-        if (t.ramp == MR_GLASS) col = (uint8_t)(P_VEH + (n[1] > 0.25f ? 13 : 12));
-        else if (t.ramp == MR_DARK) col = (uint8_t)(P_VEH + 14);
-        else col = (uint8_t)(P_VEH + t.ramp * 4 + clampi((int)(lit * 3.2f + 0.35f + n[1] * 0.4f), 0, 3));
-        CV c3v[3] = {camPt(P[0][0], P[0][1], P[0][2], 0.f), camPt(P[1][0], P[1][1], P[1][2], 0.f), camPt(P[2][0], P[2][1], P[2][2], 0.f)};
-        fillPoly(c3v, 3, 4, col);
+    {   const float ex = v.x - cx, ey = v.y - cy, ez = v.z - cz;  // the camera in the seat (the pilot's photo): no outside
+        if (ex * ex + ey * ey + ez * ez < A.span * A.span * 0.16f) return;
     }
-    for (int k = 0; k < s_mlineN; k++) {
-        const MLine& l = s_mline[k];
-        float ax, ay, az, bx, by, bz;
-        bodyToWorld(v, l.a, ax, ay, az); bodyToWorld(v, l.b, bx, by, bz);
-        if (!v.gearDown && A.retract) continue;
-        line3(ax, ay, az, bx, by, bz, l.col, 1);
-    }
-    // the prop: a flickering pair of blades (a disc of blur at speed)
-    if (s_propR > 0.f) {
-        const float spin = s_t * (6.f + v.rpm01 * 300.f) + hashf((uint32_t)(s_t * 61.f)) * 6.28f;
-        for (int b = 0; b < 2; b++) {
-            const float ang = spin + b * 3.14159f;
-            const float p0[3] = {s_propX, s_propY, 0.f}, p1[3] = {s_propX, s_propY + sinf(ang) * s_propR, cosf(ang) * s_propR};
-            float ax, ay, az, bx, by, bz;
-            bodyToWorld(v, p0, ax, ay, az); bodyToWorld(v, p1, bx, by, bz);
-            line3(ax, ay, az, bx, by, bz, v.rpm01 > 0.5f && (b & 1) ? (uint8_t)(P_VEH + 15) : (uint8_t)(P_VEH + 14), 1);
-        }
-    }
+    ACPose P;
+    P.x = v.x; P.y = v.y; P.z = v.z;
+    P.f[0] = v.fx; P.f[1] = v.fy; P.f[2] = v.fz; P.u[0] = v.ux; P.u[1] = v.uy; P.u[2] = v.uz; P.r[0] = v.rx; P.r[1] = v.ry; P.r[2] = v.rz;
+    drawPlaneArt(v.aircraft % A_COUNT, P, A.span, -A.gearH, v.gearDown || !A.retract, v.rpm01);
     // nav lights: red on the left tip, green on the right, white tail; a strobe that flashes
     {   const float L[3] = {s_tipX, s_tipY, -s_tipZ}, R[3] = {s_tipX, s_tipY, s_tipZ}, T[3] = {s_tailX, s_tailY, 0.f};
         const bool strobe = fmodf(s_t, 1.3f) < 0.06f;
@@ -2307,9 +2511,12 @@ static void drawMarks() {
             const float f[3] = {cy0 * cp, sp, sy0 * cp};
             const float r0[3] = {-sy0, 0.f, cy0}, u0[3] = {-cy0 * sp, cp, -sy0 * sp};
             const float rr[3] = {r0[0] * cr - u0[0] * sr, r0[1] * cr - u0[1] * sr, r0[2] * cr - u0[2] * sr};
-            auto P = [&](float a, float b) { return camPt(m.x + f[0] * a + rr[0] * b, m.y + f[1] * a + rr[1] * b, m.z + f[2] * a + rr[2] * b, 0.f); };
-            CV w1[3] = {P(7.f, 0.f), P(-6.f, -5.5f), P(-4.f, 0.f)}, w2[3] = {P(7.f, 0.f), P(-4.f, 0.f), P(-6.f, 5.5f)};
-            fillPoly(w1, 3, 4, P_TAIL_D); fillPoly(w2, 3, 4, (uint8_t)(P_ROAD + 4));
+            // the bogey: the red fighter off the other sheet, in its own attitude
+            {   const float uu[3] = {rr[1] * f[2] - rr[2] * f[1], rr[2] * f[0] - rr[0] * f[2], rr[0] * f[1] - rr[1] * f[0]};
+                ACPose Q; Q.x = m.x; Q.y = m.y; Q.z = m.z;
+                for (int a = 0; a < 3; a++) { Q.f[a] = f[a]; Q.r[a] = rr[a]; Q.u[a] = uu[a]; }
+                drawPlaneArt(7, Q, 11.f, -2.f, false, 0.9f);     // the bogey: the red fighter off the other sheet, burners lit
+            }
             float sx, sy, d;
             if (renderProject(m.x, m.y, m.z, sx, sy, d) && d < 5000.f) {
                 const int bx = (int)sx, by = (int)sy, r = m.kind == MK_BOGEY_LOCK ? 5 : 4;
@@ -2557,29 +2764,10 @@ static void drawGlass() {
 
 // ================================================================================== the panel, the HUD
 static void hudText(int x, int y, const char* s, uint8_t c, int sc = 1) { font3(fb, W, H, x, y, s, c, P_HUD_K, sc); }
-static void panText(int x, int y, const char* s, uint8_t c) { font3(fb, W, H, x, y, s, c, (uint8_t)(P_COCK + 5), 1); }
 static inline void px(int x, int y, uint8_t c) { if ((unsigned)x < (unsigned)W && (unsigned)y < (unsigned)H) fb[y * W + x] = c; }
 static void line2(float x0, float y0, float x1, float y1, uint8_t c) {
     const int n = (int)fmaxf(fabsf(x1 - x0), fabsf(y1 - y0)) + 1;
     for (int k = 0; k <= n; k++) { const float t = (float)k / n; px((int)lroundf(x0 + (x1 - x0) * t), (int)lroundf(y0 + (y1 - y0) * t), c); }
-}
-// a round gauge: bezel, face, ticks every `step` of `n` around 300 degrees (from -150, clockwise)
-static void gaugeFace(int gx, int gy, int r) {
-    for (int y = -r - 1; y <= r + 1; y++) for (int x = -r - 1; x <= r + 1; x++) {
-        const int d2 = x * x + y * y;
-        if (d2 > (r + 1) * (r + 1)) continue;
-        px(gx + x, gy + y, d2 > r * r - r ? (uint8_t)(P_COCK + 4) : (uint8_t)(P_COCK + 5));
-    }
-}
-static void gaugeTicks(int gx, int gy, int r, int n, float a0, float a1) {
-    for (int k = 0; k <= n; k++) {
-        const float a = a0 + (a1 - a0) * k / n;
-        px(gx + (int)lroundf(sinf(a) * (r - 2)), gy - (int)lroundf(cosf(a) * (r - 2)), (uint8_t)(P_COCK + 6));
-    }
-}
-static void needle(int gx, int gy, float a, float len, uint8_t c) { line2((float)gx, (float)gy, gx + sinf(a) * len, gy - cosf(a) * len, c); }
-static void arc(int gx, int gy, float r, float a0, float a1, uint8_t c) {
-    for (float a = a0; a <= a1; a += 0.06f) px(gx + (int)lroundf(sinf(a) * r), gy - (int)lroundf(cosf(a) * r), c);
 }
 static float s_wayRel = 0.f;          // the waypoint's bearing relative to the nose (rad); nav on/off below
 static bool s_wayOn = false;
@@ -2590,108 +2778,22 @@ static void drawThrottle() {                                   // the slider on 
     const uint8_t kc = g_view.throttle > 0.95f ? P_HUD_A : P_HUD_G;
     for (int y = ty - 2; y <= ty + 2; y++) for (int x = x0; x <= x0 + 6; x++) px(x, y, (y == ty - 2 || y == ty + 2 || x == x0 || x == x0 + 6) ? P_HUD_K : kc);
 }
-static void drawPanel() {
+// the cockpit's world-side part: the Cub's prop turning in front of the windscreen (the panel itself is the overlay's:
+// cockpit.cpp)
+static void drawPropDisc() {
     const ViewInfo& v = g_view;
-    const AircraftSpec& A = aircraftSpec(v.aircraft);
-    char t[16];
-    const bool prop = A.vProp > 0.f;
-    // the cowling over the glare shield (prop aircraft), the prop's blur in front of it
-    if (prop) {
-        const int top = PANEL_Y - 13;
-        for (int y = top; y < PANEL_Y; y++) {
-            const float k = (float)(y - top) / (PANEL_Y - top);
-            const int hw = (int)(10.f + 18.f * sqrtf(k));
-            for (int x = 80 - hw; x <= 80 + hw; x++) px(x, y, (uint8_t)(P_COCK + ((x - 80) * (x - 80) < hw * hw / 5 && k < 0.5f ? 14 : 13)));
-        }
-        const float bl = v.rpm01 > 0.35f ? 0.10f : 0.4f;      // idling: you see the blades; at power, a haze
-        const float spin = s_t * (4.f + v.rpm01 * 60.f);
-        for (int y = 2; y < PANEL_Y; y++) for (int x = 20; x < 140; x++) {
-            const float dx = x - 80.f, dy = y - (PANEL_Y - 20.f), r = sqrtf(dx * dx + dy * dy);
-            if (r > 58.f || r < 6.f) continue;
-            const float ang = atan2f(dy, dx) - spin;
-            const float blade = fabsf(sinf(ang));
-            if (blade < 0.08f && dith(x, y) < bl * 2.f) fb[y * W + x] = s_refl[s_refl[fb[y * W + x]]];
-            else if (v.rpm01 > 0.35f && dith(x + 7, y * 3) < 0.035f) fb[y * W + x] = s_refl[fb[y * W + x]];
-        }
-    }
-    // the glare shield and the panel
-    for (int x = 0; x < W; x++) {
-        const float e = (x - 80.f) / 80.f;
-        const int gt = PANEL_Y - 3 + (int)(e * e * 3.f);
-        for (int y = gt; y < PANEL_Y; y++) px(x, y, (uint8_t)(P_COCK + 15));
-        for (int y = PANEL_Y; y < H; y++) px(x, y, (uint8_t)(P_COCK + (y == PANEL_Y ? 3 : (y < PANEL_Y + 3 ? 2 : 1))));
-    }
-    const int gy = PANEL_Y + 15, R = 13;
-    // airspeed (mph): green from the stall to cruise, yellow to the never-exceed line
-    {   const int gx = 15;
-        gaugeFace(gx, gy, R);
-        const float top = A.vNe * 1.15f * 2.237f;
-        auto ang = [&](float mph) { return -2.6f + 5.2f * clampf(mph / top, 0.f, 1.f); };
-        arc(gx, gy, R - 4.f, ang(A.vStall * 2.237f), ang(A.vCruise * 1.15f * 2.237f), (uint8_t)(P_COCK + 10));
-        arc(gx, gy, R - 4.f, ang(A.vCruise * 1.15f * 2.237f), ang(A.vNe * 2.237f), (uint8_t)(P_COCK + 11));
-        needle(gx, gy, ang(A.vNe * 2.237f), R - 1.f, (uint8_t)(P_COCK + 12));
-        gaugeTicks(gx, gy, R, 10, -2.6f, 2.6f);
-        needle(gx, gy, ang(v.ias * 2.237f), R - 3.f, (uint8_t)(P_COCK + 7));
-        snprintf(t, sizeof t, "%d", (int)(v.ias * 2.237f + 0.5f));
-        panText(gx - font3Width(t) / 2, gy + 6, t, (uint8_t)(P_COCK + 7));
-    }
-    // attitude: the horizon in the ball, the little aircraft fixed
-    {   const int gx = 45;
-        gaugeFace(gx, gy, R);
-        const float sr = sinf(v.roll), cr = cosf(v.roll), po = clampf(v.pitch, -0.7f, 0.7f) * 22.f;
-        for (int y = -R + 1; y < R; y++) for (int x = -R + 1; x < R; x++) {
-            if (x * x + y * y >= (R - 1) * (R - 1)) continue;
-            const float yy = -x * sr + y * cr;                    // the horizon turns against the roll
-            px(gx + x, gy + y, yy < -po ? (uint8_t)(P_COCK + 8) : (uint8_t)(P_COCK + 9));
-            if (fabsf(yy + po) < 0.5f) px(gx + x, gy + y, (uint8_t)(P_COCK + 6));
-        }
-        for (int x = -6; x <= 6; x++) if (abs(x) > 1) px(gx + x, gy, P_HUD_A);
-        px(gx, gy, P_HUD_A); px(gx, gy - 1, P_HUD_A);
-    }
-    // the nav compass: the card turns with your heading, the green arrow points at the waypoint
-    {   const int gx = 80, R2 = R + 1;
-        gaugeFace(gx, gy, R2);
-        const float hdg = v.yaw + 1.5707963f;                    // compass: north up the card
-        static const char* CARD[4] = {"N", "E", "S", "W"};
-        for (int k = 0; k < 12; k++) {
-            const float a = k * 0.5235988f - hdg;
-            if (k % 3 == 0) panText(gx + (int)lroundf(sinf(a) * (R2 - 5)) - 1, gy - (int)lroundf(cosf(a) * (R2 - 5)) - 2, CARD[k / 3], k == 0 ? (uint8_t)(P_COCK + 12) : (uint8_t)(P_COCK + 6));
-            else px(gx + (int)lroundf(sinf(a) * (R2 - 2)), gy - (int)lroundf(cosf(a) * (R2 - 2)), (uint8_t)(P_COCK + 6));
-        }
-        px(gx, gy - R2 + 1, P_HUD_A); px(gx, gy - R2 + 2, P_HUD_A);          // the lubber line
-        if (s_wayOn) {
-            const float a = s_wayRel;
-            line2(gx - sinf(a) * 6.f, gy + cosf(a) * 6.f, gx + sinf(a) * (R2 - 3), gy - cosf(a) * (R2 - 3), P_HUD_G);
-            const float hx = gx + sinf(a) * (R2 - 3), hy = gy - cosf(a) * (R2 - 3);
-            line2(hx, hy, hx - sinf(a + 0.5f) * 4.f, hy + cosf(a + 0.5f) * 4.f, P_HUD_G);
-            line2(hx, hy, hx - sinf(a - 0.5f) * 4.f, hy + cosf(a - 0.5f) * 4.f, P_HUD_G);
-        }
-    }
-    // altitude (feet): the long hand hundreds, the short hand thousands, the number under
-    {   const int gx = 115;
-        gaugeFace(gx, gy, R);
-        gaugeTicks(gx, gy, R, 10, 0.f, 6.2831853f * 0.9f);
-        const float ft = v.y * 3.2808f;
-        needle(gx, gy, fmodf(ft, 10000.f) / 10000.f * 6.2831853f, R - 7.f, (uint8_t)(P_COCK + 6));
-        needle(gx, gy, fmodf(ft, 1000.f) / 1000.f * 6.2831853f, R - 2.f, (uint8_t)(P_COCK + 7));
-        snprintf(t, sizeof t, "%d", (int)(ft + 0.5f));
-        panText(gx - font3Width(t) / 2, gy + 6, t, (uint8_t)(P_COCK + 7));
-    }
-    // climb (fpm): needle left at 9 o'clock is level
-    {   const int gx = 146;
-        gaugeFace(gx, gy, R);
-        gaugeTicks(gx, gy, R, 8, -1.5708f - 2.4f, -1.5708f + 2.4f);
-        const float fpm = clampf(v.vs * 196.85f, -2000.f, 2000.f);
-        needle(gx, gy, -1.5708f + fpm / 2000.f * 2.4f, R - 2.f, (uint8_t)(P_COCK + 7));
-    }
-    // the strip under the gauges: power, flaps, gear, autopilot, the waypoint's distance
-    {   const int y = H - 6;
-        snprintf(t, sizeof t, "%d%%", (int)(v.throttle * 100.f + 0.5f)); panText(3, y - 1, t, (uint8_t)(P_COCK + 6));
-        snprintf(t, sizeof t, "F%d", (int)lroundf(v.flap * 3.f)); if (A.flapCL > 0.f) panText(32, y - 1, t, (uint8_t)(P_COCK + 6));
-        if (A.retract) panText(110, y - 1, v.gearDown ? "GEAR" : "", P_HUD_G);
-        if (v.ap) panText(52, y - 1, "AP", P_HUD_G);
-        if (s_wayOn) { snprintf(t, sizeof t, "%.1f", v.navDist / 1609.f); panText(80 - font3Width(t) / 2, y - 1, t, P_HUD_G); }
-        if (v.brake && v.onGround) panText(128, y - 1, "BRK", P_HUD_A);
+    if (v.aircraft != A_CUB) return;                           // (the Beaver's are out on its wings; the jets have none)
+    const float bl = v.rpm01 > 0.35f ? 0.10f : 0.4f;           // idling: you see the blades; at power, a haze
+    const float spin = s_t * (4.f + v.rpm01 * 60.f);
+    const float hy = s_bottomCock[W / 2] + 6.f;                // the hub: just below the glare shield
+    for (int y = 0; y < H; y++) for (int x = 20; x < 140; x++) {
+        if (y >= s_bottomCock[x]) continue;
+        const float dx = x - 80.f, dy = y - hy, r = sqrtf(dx * dx + dy * dy);
+        if (r > 62.f || r < 6.f) continue;
+        const float ang = atan2f(dy, dx) - spin;
+        const float blade = fabsf(sinf(ang));
+        if (blade < 0.08f && dith(x, y) < bl * 2.f) fb[y * W + x] = s_refl[s_refl[fb[y * W + x]]];
+        else if (v.rpm01 > 0.35f && dith(x + 7, y * 3) < 0.035f) fb[y * W + x] = s_refl[fb[y * W + x]];
     }
 }
 static void drawHud() {
@@ -2701,7 +2803,7 @@ static void drawHud() {
     // the waypoint: where it is from the nose
     s_wayOn = v.navOk;
     if (v.navOk) s_wayRel = wrapPi(atan2f(v.navZ - v.z, v.navX - v.x) - v.yaw);
-    if (cock) drawPanel();
+    if (cock) drawPropDisc();
     else {
         // speed and altitude, out of the way; the heading and the waypoint across the top
         snprintf(t, sizeof t, "%d", (int)(v.ias * 2.237f + 0.5f));
@@ -2727,9 +2829,9 @@ static void drawHud() {
         }
         if (v.retract && v.gearDown && !v.onGround) hudText(4, 10, "GEAR", P_HUD_G);
     }
-    drawThrottle();
-    // the radio: who's talking and what they say, across the top
-    if (v.radioText && v.radioA > 0.05f) {
+    if (!cock) drawThrottle();                                 // (in the cockpit: its lever, on the frame)
+    // the radio: who's talking and what they say, across the top (in the cockpit: along its roof)
+    if (!cock && v.radioText && v.radioA > 0.05f) {
         for (int y = 0; y < 8; y++) for (int x = 0; x < W - 9; x++) fb[y * W + x] = s_refl[s_refl[fb[y * W + x]]];
         char line[80]; snprintf(line, sizeof line, "%s: %s", v.radioWho ? v.radioWho : "", v.radioText);
         int w = font3Width(line);
@@ -2737,14 +2839,16 @@ static void drawHud() {
         if (x0 > 2) x0 = 2;
         font3(fb, W, H, x0, 1, line, P_HUD_G, P_HUD_K, 1);
     }
-    if (v.towerBtn) {                                            // CONTACT TOWER (a chip to touch)
+    if (cock) ;                                                  // (the cockpit's TOWER button)
+    else if (v.towerBtn) {                                       // CONTACT TOWER (a chip to touch)
         const int x0 = 2, y0 = 15, x1 = 49, y1 = 25;
         for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) px(x, y, (y == y0 || y == y1 || x == x0 || x == x1) ? P_HUD_G : P_HUD_K);
         hudText(x0 + 3, y0 + 3, "CONTACT TWR", P_HUD_G);
     } else if (v.cleared) hudText(3, 17, "CLEARED", P_HUD_G);
-    if (v.apMode) hudText(cock ? 3 : 4, cock ? 28 : 26, v.apMode, P_HUD_G);
+    if (v.apMode && !(cock && v.aircraft == A_JET)) hudText(cock ? 6 : 4, cock ? 30 : 26, v.apMode, P_HUD_G);
     if (v.view == VIEW_DROP) hudText(3, 3, "DROP VIEW", P_HUD_G);
-    {   char st[32]; int y = cock ? 36 : 34;                            // the fighter's stores, the crates left
+    if (!(cock && v.aircraft == A_FIGHTER)) {                          // the fighter's stores, the crates left (its cockpit: a screen)
+        char st[32]; int y = cock ? 36 : 34;
         if (v.aam >= 0) { snprintf(st, sizeof st, "AAM %d", v.aam); hudText(3, y, st, P_HUD_G); y += 7; }
         if (v.agm >= 0) { snprintf(st, sizeof st, "AGM %d", v.agm); hudText(3, y, st, P_HUD_G); y += 7; }
         if (v.bombs >= 0) { snprintf(st, sizeof st, "BOMB %d", v.bombs); hudText(3, y, st, P_HUD_G); y += 7; }
@@ -2752,11 +2856,12 @@ static void drawHud() {
         if (v.hull >= 0.f && v.hull < 0.99f) { snprintf(st, sizeof st, "HULL %d%%", (int)(v.hull * 100.f)); hudText(3, y, st, v.hull < 0.35f ? P_HUD_R : P_AMBER); }
     }
     if (v.stall > 0.5f && ((int)(s_t * 6.f) & 1)) hudText(W / 2 - font3Width("STALL", 2) / 2, cock ? 52 : 40, "STALL", P_HUD_R, 2);
-    if (v.hangarA > 0.05f) hudText(W / 2 - font3Width("MANTIS AERO") / 2, cock ? 70 : 34, "MANTIS AERO", P_HUD_A);
+    if (v.hangarA > 0.05f) hudText(W / 2 - font3Width("MANTIS AERO") / 2, cock ? 46 : 34, "MANTIS AERO", P_HUD_A);
     if (v.msg && v.msgA > 0.05f) {
         hudText(W / 2 - font3Width(v.msg) / 2, 30, v.msg, P_HUD_W);
         if (v.sub) hudText(W / 2 - font3Width(v.sub) / 2, 38, v.sub, P_HUD_A);
     }
+    if (cock) cockpitDraw(v, s_cockLight, s_t, s_wayRel, s_wayOn);   // the panel, its instruments, the frame's hardware
     if (v.showFps) { snprintf(t, sizeof t, "%d", v.fps); hudText(2, cock ? 40 : H - 30, t, P_HUD_G); if (g_memNote) hudText(2, cock ? 47 : H - 37, g_memNote, g_memNote[4] == 'O' ? P_HUD_G : P_HUD_R); }
 }
 
@@ -2764,8 +2869,9 @@ static void drawHud() {
 // ================================================================================== frame
 void renderSetAircraft(uint8_t a) {
     s_veh = a % A_COUNT;
-    buildMesh(s_veh);
-    for (int x = 0; x < W; x++) s_bottomCock[x] = PANEL_Y;    // the panel covers the rest: no raycast there
+    planeFit(s_veh);
+    const uint8_t* cb = cockpitBottom(s_veh);                 // the cockpit's art covers the rest: no raycast there
+    for (int x = 0; x < W; x++) s_bottomCock[x] = cb[x];
 }
 
 
@@ -2863,6 +2969,7 @@ void renderFrame() {
     const Land& L = journeyLand();
     s_flowers = L.flowers; s_wet = sc.wet; s_paved = 1.f;
     const bool cockpit = g_view.view == VIEW_COCKPIT && !g_view.photo;
+    if (!cockpit) cockpitOff();                                 // (hands the overlay back: photo mode, the other views)
     if (!cockpit || s_flip) memset(s_bottom, H, sizeof(s_bottom));   // upside down: the whole picture (the panel goes on after)
     else memcpy(s_bottom, s_bottomCock, sizeof(s_bottom));
     memset(zb, 255, W * H);

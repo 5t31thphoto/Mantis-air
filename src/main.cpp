@@ -49,7 +49,6 @@ static bool takeoffCalled = false;
 static uint8_t station = 0;                      // 0..RADIO_N-1 the music, RADIO_N the weather
 static constexpr uint8_t ST_WEATHER = RADIO_N;
 // the CONTACT TOWER button (panel pixels)
-static constexpr int TWR_X0 = 4, TWR_Y0 = 30, TWR_X1 = 100, TWR_Y1 = 52;
 static float giverT = 0.f; static uint8_t giverWho = 0; static char giverLine[48];
 static void giverSay(uint8_t who, const char* line, float secs) { giverWho = who; snprintf(giverLine, sizeof giverLine, "%s", line); giverT = secs; }
 static void refreshStores() { int a, g, b; progressStores(a, g, b); Stores st = {a, g, b}; combatSetStores(st); combatRearm(); }

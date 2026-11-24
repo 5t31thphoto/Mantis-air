@@ -1,5 +1,6 @@
 #pragma GCC optimize("Os")
 #include "field.h"
+#include "mem.h"
 #include "airfield.h"
 #include "terrain.h"
 #include "journey.h"
@@ -10,7 +11,11 @@
 
 namespace mantis {
 
-static Particle s_p[PART_N];
+static Particle* s_p = nullptr;                    // (PSRAM: PART_N of them, made on first use)
+static Particle* parts() {
+    if (!s_p) { s_p = (Particle*)memSlow(PART_N * sizeof(Particle)); if (s_p) memset(s_p, 0, PART_N * sizeof(Particle)); }
+    return s_p;
+}
 static int s_pNext = 0;
 static Critter s_c[CRIT_N];
 static Bird s_bird;
@@ -21,16 +26,18 @@ static inline float frand() { s_rng = hash32(s_rng + 0x9E3779B9u); return (s_rng
 static inline float clampf(float v, float a, float b) { return v < a ? a : (v > b ? b : v); }
 
 void fieldInit(uint32_t seed) {
-    memset(s_p, 0, sizeof(s_p)); memset(s_c, 0, sizeof(s_c)); memset(&s_bird, 0, sizeof(s_bird));
+    if (parts()) memset(s_p, 0, PART_N * sizeof(Particle));
+    memset(s_c, 0, sizeof(s_c)); memset(&s_bird, 0, sizeof(s_bird));
     s_seed = seed; s_rng = seed ^ 0xF1E1Du;
     s_deerNext = 6.f; s_birdNext = 15.f;
 }
 
-const Particle* fieldParticles() { return s_p; }
+const Particle* fieldParticles() { return parts(); }
 const Critter* fieldCritters() { return s_c; }
 const Bird* fieldBirds() { return &s_bird; }
 
 void fieldEmit(uint8_t kind, float x, float y, float z, float vx, float vy, float vz, float size, float life) {
+    if (!parts()) return;
     Particle& p = s_p[s_pNext];
     s_pNext = (s_pNext + 1) % PART_N;
     p.x = x; p.y = y; p.z = z; p.vx = vx; p.vy = vy; p.vz = vz; p.size = size; p.life = life; p.age = 0.f; p.kind = kind;
@@ -196,7 +203,7 @@ void fieldUpdate(const AircraftState& car, uint8_t id, float dt, bool smoke) {
         fieldEmit(PK_SNOW, g.x + (frand() - 0.5f), g.y + g.h * (0.7f + 0.3f * frand()), g.z + (frand() - 0.5f),
                   (frand() - 0.5f) * 5.f, 2.f + frand() * 3.f, (frand() - 0.5f) * 5.f, 0.25f, 2.f + frand());
     }
-    for (Particle& p : s_p) {                                      // particles
+    if (parts()) for (int pk = 0; pk < PART_N; pk++) { Particle& p = s_p[pk];   // particles
         if (p.life <= 0.f) continue;
         p.age += dt;
         if (p.age >= p.life) { p.life = 0.f; continue; }
