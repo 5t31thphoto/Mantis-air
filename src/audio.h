@@ -1,0 +1,50 @@
+#pragma once
+#include <stdint.h>
+
+// Live 24 kHz synthesis on core 0 -> the Core2 speaker. The engine, the tyres and the weather are synthesised
+// (no samples); the nature bed is MantisPlanet's. Bass lives in the vibration motor (haptics).
+
+namespace mantis {
+
+constexpr int AUDIO_SR = 24000;
+
+// The aircraft as the audio hears it (written by the main loop every frame; floats are atomic on the ESP32). The
+// piston engines are Rally's firing-pulse engines (a flat four, a radial, a big V); props chop the sound at their
+// blade rate; the jets are a turbine whine over a roar. speed is the airspeed (the wind), air: off the ground.
+struct CarAudio {
+    uint8_t engine;            // ENG_*
+    float rpm, rpm01, throttle, boost, spin, slide, speed, water;
+    uint8_t surf, deck;
+    bool air, limiter, reverse, cockpit;
+    uint8_t blades; float stall; bool guns;
+};
+extern CarAudio g_car;
+
+enum : uint8_t { BUMP_TREE, BUMP_ROCK, BUMP_WATER };
+enum : uint8_t { CRIT_DEER, CRIT_RABBIT, CRIT_BIRDS, CRIT_BUTTERFLY, CRIT_DUCK, CRIT_BEAVER, CRIT_SQUIRREL, CRIT_SPLASH, CRIT_HERON };
+enum : uint8_t { IMP_TREE, IMP_ROCK, IMP_DEER, IMP_CRUNCH, IMP_WIPE, IMP_WIPE_DEER, IMP_SHUTTER };
+enum : uint8_t { UI_TICK, UI_OK, UI_SOLD, UI_ARRIVE, UI_FORK, UI_WARN, UI_MUTE };
+
+void audioSpeakerBegin();   // right after M5.begin(), before other allocations
+void audioBegin();
+
+// game -> audio (lock-free, never blocks the game)
+void sfxBump(float strength);       // suspension slam / pothole
+void sfxLand(float strength);       // touching down after air
+void sfxShift(int dir);             // +1 up, -1 down
+void sfxHorn();
+void sfxThunder(float delaySec, float power);
+void sfxSplash(float strength);
+void sfxCrash(float strength, bool tree);
+void sfxCritter(uint8_t kind, float dist);
+void sfxImpact(uint8_t kind, float strength);      // trees, rocks, deer, hard landings, the wipers
+void sfxUi(uint8_t kind);
+// a voice on the radio: babble (syllables through a radio's band) for `secs`, voice 0 tower, 1 a pilot, 2 the weather
+void sfxVoice(float secs, uint8_t voice);
+
+bool audioRunning();
+void audioSetMuted(bool muted);
+bool audioMuted();
+void audioRender(int16_t* out, int n);
+
+}
