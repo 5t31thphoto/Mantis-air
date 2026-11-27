@@ -305,6 +305,37 @@ footer a:hover { text-decoration: underline; }
   .gallery { grid-template-columns: 1fr; }
   .wrap { padding: 0 16px 56px; }
 }
+
+.affiliate {
+  margin-top: 1rem;
+  max-width: 380px;
+}
+.affiliate a {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--neon);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid rgba(0,255,0,0.25);
+  border-radius: 10px;
+  background: rgba(0,255,0,0.04);
+  transition: border-color .15s, background .15s;
+}
+.affiliate a:hover {
+  border-color: var(--neon);
+  background: rgba(0,255,0,0.1);
+}
+.affiliate img {
+  width: 49px;
+  height: 56px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.4));
+}
+
 </style>
 </head>
 <body>
@@ -330,6 +361,14 @@ footer a:hover { text-decoration: underline; }
         <p class="or">or</p>
         <a class="bin-dl" href="./firmware/firmware-merged.bin" download="mantis-air-firmware-merged.bin">Download merged .bin</a>
         <p class="unsupported">Manual: <code>esptool.py --chip esp32 write_flash 0x0 firmware-merged.bin</code></p>
+      </div>
+
+      <div class="affiliate">
+        <a href="https://www.amazon.com/dp/B0H79XYB8R/?tag=5t31th-20"
+           target="_blank" rel="sponsored noopener">
+          <img src="assets/core2-small.png" alt="M5Stack Core2" width="49" height="56">
+          Get the Core 2 hardware ↗
+        </a>
       </div>
     </div>
 
@@ -388,4 +427,9 @@ footer a:hover { text-decoration: underline; }
     <a href="https://5t31thphoto.github.io/mantisrally/">Rally</a>,
     <a href="https://5t31thphoto.github.io/mantisplanet-/">Planet</a> and
     <a href="https://5t31thphoto.github.io/seadiver/">Seadiver</a>.
-    Built for M5Stack Core2 ·
+    Built for M5Stack Core2 · Basalt Softworks.
+  </footer>
+
+</div>
+</body>
+</html>
