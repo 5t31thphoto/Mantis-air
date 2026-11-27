@@ -250,6 +250,12 @@ section .intro {
   height: auto;
   image-rendering: pixelated;
 }
+.gallery img[src$=".gif"] {
+  image-rendering: auto;
+}
+.gallery img[src$=".gif"] {
+  image-rendering: auto;
+}
 .gallery figcaption {
   padding: 0.55rem 0.75rem;
   font-size: 0.8rem;
@@ -312,7 +318,7 @@ footer a:hover { text-decoration: underline; }
         A living sky from noon to night — fields, coast, and stars,
         flown entirely on the device.
       </p>
-      <img class="plane-deco" src="assets/plane-side-clean.png" alt="" width="348" height="144">
+      <img class="plane-deco" src="assets/plane-side-clean.png" alt="" width="320" height="139">
 
       <div class="flash">
         <h2>Flash to Core2</h2>
@@ -342,41 +348,37 @@ footer a:hover { text-decoration: underline; }
     <p class="intro">Tilt controls with on-screen throttle.</p>
   </section>
 
-  <section>
+    <section>
     <h2>From the cockpit</h2>
-    <p class="intro">Day, dusk, and night with weather. Progress theough a career as a pilot and unlock new aircraft in an infinite world.</p>
+    <p class="intro">Current builds — cockpit, runway, and flight.</p>
     <div class="gallery">
       <figure>
-        <img src="assets/gal_instruments.png" alt="Day instruments" width="480" height="300">
-        <figcaption><b>Instruments</b> · clear day</figcaption>
+        <img src="assets/shot_cockpit_bush.png" alt="Bush cockpit" width="480" height="300">
+        <figcaption><b>Cockpit</b> · tower call</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_cruise.png" alt="Cruise over terrain" width="480" height="300">
-        <figcaption><b>Cruise</b> · fields ahead</figcaption>
+        <img src="assets/shot_cockpit_glass.png" alt="Glass cockpit" width="480" height="300">
+        <figcaption><b>Glass panel</b> · full instruments</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_wing_day.png" alt="Wing view day" width="480" height="300">
-        <figcaption><b>Wing</b> · daylight</figcaption>
+        <img src="assets/shot_runway.png" alt="On runway at Mantis Home" width="480" height="300">
+        <figcaption><b>Mantis Home</b> · cleared for takeoff</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_sunset.png" alt="Sunset horizon" width="480" height="300">
-        <figcaption><b>Sunset</b> · copper sky</figcaption>
+        <img src="assets/shot_approach.png" alt="Approach to Mantis Aero" width="480" height="300">
+        <figcaption><b>Approach</b> · Mantis Aero</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_night.png" alt="Night flight" width="480" height="300">
-        <figcaption><b>Night</b> · moon &amp; stars</figcaption>
+        <img src="assets/shot_flyby.png" alt="Rear flyby over fields" width="480" height="300">
+        <figcaption><b>Flyby</b> · over the fields</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_night_wing.png" alt="Night wing" width="480" height="300">
-        <figcaption><b>Night wing</b></figcaption>
+        <img src="assets/shot_bank.png" alt="Side bank over forest" width="480" height="300">
+        <figcaption><b>Bank</b> · treeline</figcaption>
       </figure>
       <figure>
-        <img src="assets/gal_dawn.png" alt="Dawn" width="480" height="300">
-        <figcaption><b>Dawn</b> · first light</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/gal_morning.png" alt="Morning over water" width="480" height="300">
-        <figcaption><b>Morning</b> · open water</figcaption>
+        <img src="assets/shot_sunset.gif" alt="Sunset over water" width="320" height="240" loading="eager">
+        <figcaption><b>Sunset</b> · over the water</figcaption>
       </figure>
     </div>
   </section>
@@ -386,9 +388,4 @@ footer a:hover { text-decoration: underline; }
     <a href="https://5t31thphoto.github.io/mantisrally/">Rally</a>,
     <a href="https://5t31thphoto.github.io/mantisplanet-/">Planet</a> and
     <a href="https://5t31thphoto.github.io/seadiver/">Seadiver</a>.
-    Built for M5Stack Core2 · Basalt Softworks.
-  </footer>
-
-</div>
-</body>
-</html>
+    Built for M5Stack Core2 ·
