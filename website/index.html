@@ -3,201 +3,386 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mantis Rally — infinite stages that dream themselves</title>
+<meta name="theme-color" content="#121212">
+<meta name="description" content="Mantis Air — a flight simulator for the M5Stack Core2 by Basalt Softworks.">
+<title>Mantis Air — flight for the Core2</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=Literata:opsz,wght@7..72,400;7..72,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script type="module" src="https://unpkg.com/esp-web-tools@10.0.1/dist/web/install-button.js?module"></script>
 <style>
   :root {
-    --asphalt: #2a2a2e;
-    --gravel: #8b7355;
-    --sky: #c45c26;
-    --dusk: #1a0f2e;
-    --night: #0a0612;
-    --line: #f2e6c8;
-    --accent: #e8a838;
-    --ink: #f5efe6;
-    --ink-dim: #b8a99a;
+    /* BasaltSoftworks Mantis color system */
+    --bs-bg-base: #121212;
+    --bs-bg-surface: #232323;
+    --bs-text-light: #f0ffff;
+    --bs-accent-neon: #00ff00;
+    --bs-brand-teal: #007373;
+    --bs-brand-plum: #5d005d;
+
+    --ink: var(--bs-text-light);
+    --ink-dim: #9ab5b5;
+    --panel: var(--bs-bg-surface);
+    --line: rgba(0, 255, 0, 0.18);
+    --accent: var(--bs-accent-neon);
+    --teal: var(--bs-brand-teal);
+    --plum: var(--bs-brand-plum);
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
     color: var(--ink);
-    font-family: "Literata", Georgia, serif;
-    font-size: 1.06rem;
-    line-height: 1.68;
-    background: linear-gradient(180deg, #e8a868 0, var(--sky) 480px, #5c3a2a 1200px, var(--dusk) 2000px, var(--night) 100%);
+    font-family: "IBM Plex Sans", system-ui, sans-serif;
+    font-size: 1.05rem;
+    line-height: 1.65;
+    background: var(--bs-bg-base);
     min-height: 100vh;
   }
-  main { max-width: 920px; margin: 0 auto; padding: 0 28px 80px; }
-  .hero { min-height: 88vh; display: grid; align-content: center; padding: 56px 0 32px; }
+  main { max-width: 960px; margin: 0 auto; padding: 0 28px 80px; }
+
+  /* Hero */
+  .hero {
+    min-height: 92vh;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+    padding: 48px 0 40px;
+  }
+  .hero-copy { max-width: 28rem; }
   h1 {
-    font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
-    font-size: clamp(2.8rem, 8vw, 6.2rem); line-height: 0.9; letter-spacing: -0.03em;
-    margin: 0; color: #fff8f0;
-    text-shadow: 0 2px 0 rgba(40, 16, 0, 0.35);
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 800;
+    font-size: clamp(2.6rem, 7vw, 4.4rem);
+    line-height: 0.95;
+    letter-spacing: -0.03em;
+    margin: 0;
+    color: var(--ink);
+  }
+  h1 .mark {
+    color: var(--accent);
   }
   h1 small {
-    display: block; font-size: 0.32em; font-weight: 500; letter-spacing: -0.01em;
-    color: #3a1e10; margin-top: 0.85em; max-width: 24ch; line-height: 1.2;
+    display: block;
+    font-size: 0.34em;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--ink-dim);
+    margin-top: 0.9em;
+    max-width: 26ch;
+    line-height: 1.25;
   }
-  .lede { max-width: 38ch; margin: 1.4em 0 0; color: #2a1810; font-size: 1.12rem; }
+  .lede {
+    margin: 1.3em 0 0;
+    color: var(--ink-dim);
+    font-size: 1.05rem;
+    max-width: 36ch;
+  }
+  .hero-art {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    box-shadow: 0 0 60px rgba(0, 255, 0, 0.08), 0 24px 48px rgba(0,0,0,.5);
+  }
+  .hero-art img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  /* Flash panel */
   .flash {
-    margin-top: 2.2em; padding: 1.4em 1.5em; border-radius: 14px;
-    background: rgba(10, 6, 18, 0.72); border: 1px solid rgba(242, 230, 200, 0.22);
-    max-width: 420px;
+    margin-top: 2em;
+    padding: 1.35em 1.4em;
+    border-radius: 14px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    max-width: 400px;
   }
   .flash h2 {
-    font-family: "Bricolage Grotesque", sans-serif; font-size: 1rem; font-weight: 800;
-    margin: 0 0 0.6em; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent);
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-size: 0.95rem;
+    font-weight: 800;
+    margin: 0 0 0.55em;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
   }
-  .flash p { margin: 0 0 1em; color: var(--ink-dim); font-size: 0.95rem; }
+  .flash p { margin: 0 0 1em; color: var(--ink-dim); font-size: 0.92rem; }
   esp-web-install-button { display: block; }
-  esp-web-install-button button, .install-fallback, a.bin-dl {
-    font-family: "Bricolage Grotesque", sans-serif; font-weight: 800; font-size: 1.05rem;
-    background: var(--accent); color: #1a0f08; border: none; border-radius: 999px;
-    padding: 0.75em 1.4em; cursor: pointer; width: 100%;
-    display: block; text-align: center; text-decoration: none; box-sizing: border-box;
-  }
-  esp-web-install-button button:hover, .install-fallback:hover, a.bin-dl:hover { filter: brightness(1.08); }
+  esp-web-install-button button,
+  .install-fallback,
   a.bin-dl {
-    background: transparent; color: var(--line);
-    border: 1px solid rgba(242, 230, 200, 0.35); margin-top: 0.75em;
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 800;
+    font-size: 1.02rem;
+    background: var(--accent);
+    color: #121212;
+    border: none;
+    border-radius: 999px;
+    padding: 0.72em 1.35em;
+    cursor: pointer;
+    width: 100%;
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    box-sizing: border-box;
   }
-  a.bin-dl:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  esp-web-install-button button:hover,
+  .install-fallback:hover,
+  a.bin-dl:hover { filter: brightness(1.1); }
+  a.bin-dl {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid rgba(0, 255, 0, 0.28);
+    margin-top: 0.7em;
+  }
+  a.bin-dl:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    filter: none;
+  }
   .flash .or {
-    text-align: center; color: var(--ink-dim); font-size: 0.8rem;
-    margin: 0.85em 0 0; letter-spacing: 0.06em; text-transform: uppercase;
+    text-align: center;
+    color: var(--ink-dim);
+    font-size: 0.78rem;
+    margin: 0.8em 0 0;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
-  .unsupported { color: var(--ink-dim); font-size: 0.9rem; margin-top: 0.8em; }
-  .flash code { font-size: 0.85em; color: var(--accent); }
-  section { margin: 4.5em 0; }
+  .unsupported { color: var(--ink-dim); font-size: 0.88rem; margin-top: 0.75em; }
+  .flash code { font-size: 0.84em; color: var(--accent); }
+
+  /* Sections */
+  section { margin: 4.2em 0; }
   h2 {
-    font-family: "Bricolage Grotesque", sans-serif; font-weight: 800;
-    font-size: clamp(1.6rem, 3.5vw, 2.2rem); letter-spacing: -0.02em; margin: 0 0 0.6em;
+    font-family: "Bricolage Grotesque", sans-serif;
+    font-weight: 800;
+    font-size: clamp(1.5rem, 3.2vw, 2rem);
+    letter-spacing: -0.02em;
+    margin: 0 0 0.55em;
+    color: var(--ink);
   }
+  section > p {
+    color: var(--ink-dim);
+    max-width: 52ch;
+    margin: 0 0 1.4em;
+  }
+
+  /* Aircraft showcase */
+  .aircraft {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-top: 1.2em;
+  }
+  .aircraft figure {
+    margin: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.1em 0.8em 0.9em;
+    text-align: center;
+  }
+  .aircraft img {
+    max-width: 100%;
+    height: 88px;
+    width: auto;
+    object-fit: contain;
+    image-rendering: pixelated;
+  }
+  .aircraft figcaption {
+    margin-top: 0.6em;
+    font-size: 0.82rem;
+    color: var(--ink-dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Controls */
   .controls {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
   }
   .controls div {
-    background: rgba(10, 6, 18, 0.55); border: 1px solid rgba(242, 230, 200, 0.15);
-    border-radius: 12px; padding: 1em 1.1em;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 0.95em 1.05em;
   }
-  .controls b { font-family: "Bricolage Grotesque", sans-serif; color: var(--accent); display: block; margin-bottom: 0.25em; }
+  .controls b {
+    font-family: "Bricolage Grotesque", sans-serif;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.2em;
+    font-size: 0.95rem;
+  }
+  .controls span { color: var(--ink-dim); font-size: 0.92rem; }
+
+  /* Gallery */
   .gallery {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
   }
   .gallery figure {
-    margin: 0; background: rgba(10, 6, 18, 0.5); border-radius: 12px; overflow: hidden;
-    border: 1px solid rgba(242, 230, 200, 0.12);
+    margin: 0;
+    background: var(--panel);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--line);
   }
-  .gallery img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
-  .gallery figcaption { padding: 0.7em 0.9em; font-size: 0.9rem; color: var(--ink-dim); }
+  .gallery img {
+    display: block;
+    width: 100%;
+    height: auto;
+    image-rendering: pixelated;
+  }
+  .gallery figcaption {
+    padding: 0.65em 0.85em;
+    font-size: 0.88rem;
+    color: var(--ink-dim);
+  }
   .gallery figcaption b { color: var(--ink); }
+
+  /* Footer */
   footer {
-    margin-top: 5em; padding-top: 1.5em; border-top: 1px solid rgba(242, 230, 200, 0.18);
-    color: var(--ink-dim); font-size: 0.92rem;
+    margin-top: 4.5em;
+    padding-top: 1.4em;
+    border-top: 1px solid var(--line);
+    color: var(--ink-dim);
+    font-size: 0.9rem;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  @media (max-width: 820px) {
+    .hero {
+      grid-template-columns: 1fr;
+      min-height: auto;
+      gap: 28px;
+      padding-top: 36px;
+    }
+    .hero-art { order: -1; max-width: 420px; margin: 0 auto; }
+    .aircraft { grid-template-columns: 1fr; }
+    .aircraft img { height: 72px; }
+  }
+  @media (max-width: 520px) {
+    main { padding: 0 18px 60px; }
+    .flash { max-width: none; }
   }
 </style>
 </head>
 <body>
 <main>
   <div class="hero">
-    <h1>Mantis Rally<small>an infinite stage that dreams itself</small></h1>
-    <p class="lede">
-      Tip the Core2 forward to gas, pull back to brake, tilt to steer, hold C for the handbrake.
-      Seventeen biomes, branching roads, drifts that stick. Everything is made live on the device.
-    </p>
-    <div class="flash">
-      <h2>Flash to Core2</h2>
-      <p>Chrome or Edge, USB cable. Same web installer as Planet and Seadiver. CI writes the merged image after every build.</p>
-      <esp-web-install-button manifest="./firmware/manifest.json">
-        <button slot="activate">Install Mantis Rally</button>
-        <span slot="unsupported" class="unsupported">
-          Web flasher needs Chrome / Edge on desktop with WebSerial.
-        </span>
-      </esp-web-install-button>
-      <p class="or">or</p>
-      <a class="bin-dl" href="./firmware/firmware-merged.bin" download="mantis-rally-firmware-merged.bin">Download merged .bin</a>
-      <p class="unsupported" style="margin-top:0.9em">
-        Manual flash: <code>esptool.py --chip esp32 write_flash 0x0 firmware-merged.bin</code>
+    <div class="hero-copy">
+      <h1>Mantis <span class="mark">Air</span><small>flight for the M5Stack Core2</small></h1>
+      <p class="lede">
+        Tilt to bank, tip to pitch, feel the sky change from noon to night.
+        A living world of fields, coast and stars — flown entirely on the device.
       </p>
+      <div class="flash">
+        <h2>Flash to Core2</h2>
+        <p>Chrome or Edge, USB cable. Same web installer used across the Mantis lineup. CI writes the merged image after every build.</p>
+        <esp-web-install-button manifest="./firmware/manifest.json">
+          <button slot="activate">Install Mantis Air</button>
+          <span slot="unsupported" class="unsupported">
+            Web flasher needs Chrome / Edge on desktop with WebSerial.
+          </span>
+        </esp-web-install-button>
+        <p class="or">or</p>
+        <a class="bin-dl" href="./firmware/firmware-merged.bin" download="mantis-air-firmware-merged.bin">Download merged .bin</a>
+        <p class="unsupported" style="margin-top:0.85em">
+          Manual flash: <code>esptool.py --chip esp32 write_flash 0x0 firmware-merged.bin</code>
+        </p>
+      </div>
+    </div>
+    <div class="hero-art">
+      <img src="assets/splash-hero.png" alt="Mantis Air splash — pilot mantis on the tarmac" width="1200" height="896">
     </div>
   </div>
 
   <section>
-    <h2>Drive</h2>
-    <div class="controls">
-      <div><b>Tilt left / right</b>Steer</div>
-      <div><b>Tip forward</b>Throttle</div>
-      <div><b>Pull back</b>Brake &middot; hold at a stop to reverse</div>
-      <div><b>Hold C</b>Handbrake</div>
-      <div><b>A</b>Horn &middot; stopped: camera</div>
-      <div><b>B</b>Change view &middot; hold: re-centre tilt</div>
-      <div><b>Double-tap screen</b>Stuck? Back on the road</div>
-      <div><b>Hold screen</b>Mute</div>
-      <div><b>Camera: A</b>Take the photo</div>
-      <div><b>Camera: C</b>Next angle</div>
-      <div><b>Camera: B</b>Back to driving</div>
-      <div><b>Camera: tilt</b>Turn and tilt the shot</div>
+    <h2>The aircraft</h2>
+    <p>A compact bush plane built for the Core2’s screen — top, side and forward views drawn for the 320×240 display.</p>
+    <div class="aircraft">
+      <figure>
+        <img src="assets/plane-top.png" alt="Top-down view of the Mantis Air plane" width="298" height="220">
+        <figcaption>Top</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/plane-side.png" alt="Side view of the Mantis Air plane" width="314" height="136">
+        <figcaption>Side</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/plane-front.png" alt="Front view of the Mantis Air plane" width="314" height="137">
+        <figcaption>Front</figcaption>
+      </figure>
     </div>
   </section>
 
   <section>
-    <h2>Stages</h2>
-    <p>Twelve biomes and the roads between them: pine forest, redwood cathedral, lake country, rain moor, Devil&rsquo;s Pass, alpine summit, red canyon, coast highway, wildflower meadow, autumn ridge, bayou mud and frost tundra. Weather wanders, the day turns, and every fork names where it leads.</p>
+    <h2>Fly</h2>
+    <div class="controls">
+      <div><b>Tilt left / right</b><span>Bank &amp; turn</span></div>
+      <div><b>Tip forward</b><span>Pitch down</span></div>
+      <div><b>Pull back</b><span>Pitch up</span></div>
+      <div><b>A</b><span>Throttle up</span></div>
+      <div><b>B</b><span>Throttle down / reverse</span></div>
+      <div><b>C</b><span>Camera / view cycle</span></div>
+      <div><b>Hold screen</b><span>Mute</span></div>
+      <div><b>Double-tap</b><span>Reset attitude</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>From the cockpit</h2>
+    <p>Day, dusk and night over fields, water and open sky. Instruments and horizon stay readable on the small display.</p>
     <div class="gallery">
       <figure>
-        <img src="assets/01_tundra_aurora.png" alt="Frost Tundra at night from the STI, aurora overhead">
-        <figcaption><b>Frost Tundra.</b> Aurora overhead, headlights on the snow.</figcaption>
+        <img src="assets/gallery_day_instruments.png" alt="Daytime with full instrument panel">
+        <figcaption><b>Day instruments.</b> Full panel under clear sky.</figcaption>
       </figure>
       <figure>
-        <img src="assets/02_redwood_morning.png" alt="Redwood Cathedral at morning">
-        <figcaption><b>Redwood Cathedral.</b> Morning through the giants.</figcaption>
+        <img src="assets/gallery_day_forward.png" alt="Forward view over green terrain">
+        <figcaption><b>Cruise.</b> Fields and ridgelines ahead.</figcaption>
       </figure>
       <figure>
-        <img src="assets/03_autumn_ridge.png" alt="The STI on Autumn Ridge gravel">
-        <figcaption><b>Autumn Ridge.</b> Gravel, crests and the co-driver calling them.</figcaption>
+        <img src="assets/gallery_wing_day.png" alt="Looking over the wing in daylight">
+        <figcaption><b>Wing view.</b> Daylight over the canopy.</figcaption>
       </figure>
       <figure>
-        <img src="assets/04_lake_road_rainbow.png" alt="Lake Country road at sunset with a rainbow">
-        <figcaption><b>Lake Country.</b> Sunset, and a rainbow after the rain.</figcaption>
+        <img src="assets/gallery_sunset_horizon.png" alt="Sunset horizon from the cockpit">
+        <figcaption><b>Sunset.</b> Horizon turns copper and violet.</figcaption>
       </figure>
       <figure>
-        <img src="assets/05_wildflower_meadow.png" alt="The STI on a dirt road through the Wildflower Meadow">
-        <figcaption><b>Wildflower Meadow.</b> Dirt roads through the flowers.</figcaption>
+        <img src="assets/gallery_night_moon.png" alt="Night flight with moon">
+        <figcaption><b>Night.</b> Moon and stars over dark ground.</figcaption>
       </figure>
       <figure>
-        <img src="assets/06_red_canyon.png" alt="Red Canyon at sunset">
-        <figcaption><b>Red Canyon.</b> Mesas glowing at sundown.</figcaption>
+        <img src="assets/gallery_night_wing.png" alt="Night wing view">
+        <figcaption><b>Night wing.</b> Running lights in the dark.</figcaption>
       </figure>
       <figure>
-        <img src="assets/07_rain_moor.png" alt="Rain on the STI windshield crossing the Rain Moor">
-        <figcaption><b>Rain Moor.</b> Rain on the glass, mud on the road.</figcaption>
+        <img src="assets/gallery_dawn_wing.png" alt="Dawn over the wing">
+        <figcaption><b>Dawn.</b> First light on the wing.</figcaption>
       </figure>
       <figure>
-        <img src="assets/08_coast_highway.png" alt="The STI on the Coast Highway">
-        <figcaption><b>Coast Highway.</b> Tarmac sweepers by the sea.</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/09_photo_rear_rainbow.png" alt="Photo mode: the STI from behind under a rainbow">
-        <figcaption><b>Photo mode.</b> Park anywhere and shoot your car.</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/10_photo_side_dusk.png" alt="Photo mode: the STI side view at dusk">
-        <figcaption><b>Photo mode.</b> Side, rear, other side, and a look around.</figcaption>
-      </figure>
-      <figure>
-        <img src="assets/11_mantis_motors_sign.png" alt="A MANTIS MOTORS sign beside the road">
-        <figcaption><b>Mantis Motors.</b> Keep an eye out.</figcaption>
+        <img src="assets/gallery_morning_sky.png" alt="Morning sky and water">
+        <figcaption><b>Morning.</b> Clear air over water.</figcaption>
       </figure>
     </div>
   </section>
 
   <footer>
-    Mantis Rally joins MantisPlanet and Mantis Seadiver. Built for M5Stack Core2.
+    Mantis Air joins <a href="https://5t31thphoto.github.io/mantisrally/">Mantis Rally</a>,
+    <a href="https://5t31thphoto.github.io/mantisplanet-/">MantisPlanet</a> and
+    <a href="https://5t31thphoto.github.io/seadiver/">Mantis Seadiver</a>.
+    Built for M5Stack Core2 by Basalt Softworks.
     Firmware is produced by GitHub Actions and served from this page.
   </footer>
 </main>
