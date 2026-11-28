@@ -271,18 +271,18 @@ def beaver(src):
     h_w = P.sh(wb) + 0.1
     P.wing('wing', 0, P.mask('top').shape[1], 40, 106, h_w, 0.42, 0.22, n=18,
            skip=[(P.cxT - 62, P.cxT - 33), (P.cxT - 26, P.cxT + 26), (P.cxT + 33, P.cxT + 62)])
-    # the nacelles: under the wing, where the end view has the props (row 45, at its two discs); from their spinners
-    # (the top view's pods ahead of the wing) back to the wing's trailing edge (the side view's engine block ends
-    # there); round, as wide as the top view's pod ahead of the wing
-    pa, pb = P.row('top', 26, P.cxT + 30, P.cxT + 80)
-    n_hw = (pb - pa) * P.kT / 2; n_r = P.tr((pa + pb) / 2)
+    # the engines: short nacelles on the wing, where the end view has the props (row 45, at its two discs), from the
+    # spinner just ahead of the prop (the top view's row 40; the side view's prop at x 60) back to the wing's trailing
+    # edge (where the side view's engine block ends). The long pods in the top view are the floats underneath: their
+    # fronts are the floats' bows, not the engines'.
+    pa, pb = P.row('top', 60, P.cxT + 30, P.cxT + 80)
+    n_hw = min((pb - pa) * P.kT / 2, 0.62); n_r = P.tr((pa + pb) / 2)
     n_h = P.eh(45)
-    d0, d1 = P.td(8), P.td(104)
+    d0, d1 = P.td(34), P.td(104)
     def n_shape(d):
         t = (d - d0) / (d1 - d0)
-        k = min(1.0, 0.35 + 0.65 * math.sqrt(max(t, 0.0) / 0.25)) if t < 0.25 else (1.0 if t < 0.8 else 1.0 - 0.45 * (t - 0.8) / 0.2)
-        return k
-    nac = P.loft('nacelle', P.sx(d0), P.sx(d1), None, None, None, n=10, mirror=True,
+        return 0.45 + 0.55 * math.sqrt(t / 0.15) if t < 0.15 else (1.0 if t < 0.8 else 1.0 - 0.45 * (t - 0.8) / 0.2)
+    nac = P.loft('nacelle', P.sx(d0), P.sx(d1), None, None, None, n=9, mirror=True,
                  hgt=lambda d: (n_h + n_hw * n_shape(d), n_h - n_hw * n_shape(d)), width=lambda d: (n_hw * n_shape(d), n_r))
     # the floats: the side view's (its top at row 111, below the struts), out where the end view has them, as wide
     # as the top view's pods behind the wing
@@ -305,7 +305,7 @@ def beaver(src):
     d_cg = P.td(54 + 0.25 * 50)
     m = P.finish(d_cg)
     # props: at the nacelles' fronts, the cards' radius
-    hubs = [(m.d_cg - P.td(40), n_h - m.h_cg, sgn * n_r, 0.1343 * P.span) for sgn in (1, -1)]   # (the props: top row 40)
+    hubs = [(m.d_cg - P.td(38), n_h - m.h_cg, sgn * n_r, 0.1343 * P.span) for sgn in (1, -1)]   # (the props: just behind the spinner)
     return P, m, hubs
 
 def gear_from_boxes(P, wr, w):

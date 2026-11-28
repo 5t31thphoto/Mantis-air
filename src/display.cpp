@@ -142,7 +142,7 @@ static int64_t s_scanUs = 0;         // one refresh
 static int s_gtsShift = -1;          // where the 10-bit line count sits in the 24 bits read back (see syncCalibrate)
 #ifndef HOST
 static uint32_t readScanRaw() {
-    const uint32_t r = M5.Display.readCommand(0x45, 0, 3);          // three bytes, first received in the low byte
+    const uint32_t r = M5.Display.getPanel()->readCommand(0x45, 0, 3);   // three bytes, first received in the low byte (the panel reads; M5GFX itself has no readCommand)
     return ((r & 0xFFu) << 16) | (r & 0xFF00u) | ((r >> 16) & 0xFFu);   // as a big-endian bit stream
 }
 static int readScanline() {
