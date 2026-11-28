@@ -51,7 +51,26 @@ static void instrumentColours(const CockpitLight& L) {
 }
 
 // ---------------------------------------------------------------------------- the art
+// Where the world shows: every row above the panel's highest point (top), and below it the side windows, as a few
+// rectangles (from the art's per-column table). Everything else is the panel: sent once, then only what changes.
+static int s_top = 240, s_nWin = 0;
+static DisplayRect s_win[6];
+static void windows(int a) {
+    const uint8_t* b = COCK_ART[a & 3].bottom;
+    int lo = 120;
+    for (int x = 0; x < 160; x++) if (b[x] < lo) lo = b[x];
+    s_top = lo * 2; s_nWin = 0;
+    for (int x = 0; x < 160;) {
+        if (b[x] <= lo) { x++; continue; }
+        int x1 = x, hi = lo;
+        while (x1 < 160 && b[x1] > lo) { if (b[x1] > hi) hi = b[x1]; x1++; }
+        if (s_nWin < 6) s_win[s_nWin++] = {(int16_t)(x * 2), (int16_t)s_top, (int16_t)((x1 - x) * 2), (int16_t)(hi * 2 - s_top)};
+        else { DisplayRect& r = s_win[5]; const int e = x1 * 2; r.w = (int16_t)(e - r.x); if (hi * 2 - s_top > r.h) r.h = (int16_t)(hi * 2 - s_top); }
+        x = x1;
+    }
+}
 static void decode(int a, const CockpitLight& L) {
+    windows(a);
     uint16_t lut[64];
     for (int i = 0; i < 64; i++) {
         const uint8_t* c = COCK_PAL[i];
@@ -66,7 +85,19 @@ static void decode(int a, const CockpitLight& L) {
         for (int x = 0; x < OW;) { const int n = *p++; const uint16_t c = lut[*p++]; for (int k = 0; k < n && x < OW; k++) d[x++] = c; }
     }
 }
+// what changed this frame (screen rectangles), for the display to send: the panel itself stays on the LCD
+static DisplayRect s_dirty[24]; static int s_nDirty = 0; static bool s_dirtyAll = false;
+static void dirty(int x0, int y0, int x1, int y1) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 320) x1 = 320;
+    if (y1 > 240) y1 = 240;
+    if (x0 >= x1 || y0 >= y1) return;
+    if (s_nDirty == 24) { s_dirtyAll = true; return; }
+    s_dirty[s_nDirty++] = {(int16_t)x0, (int16_t)y0, (int16_t)(x1 - x0), (int16_t)(y1 - y0)};
+}
 static void restore(int x0, int y0, int x1, int y1) {
+    dirty(x0, y0, x1, y1);
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
     if (x1 > OW) x1 = OW;
@@ -236,8 +267,8 @@ static void gRPM(const Inst& I, int cx, int cy, int r) {
 }
 
 // ---------------------------------------------------------------------------- screens
-static void screen(int x0, int y0, int x1, int y1) { fill(x0, y0, x1, y1, C_SCREEN); clip(x0, y0, x1, y1); }
-static void lamp(int cx, int cy, int r, bool on, uint16_t c) { disc(cx + 0.5f, cy + 0.5f, r, on ? c : C_LAMP_OFF); if (on) pset(cx, cy, rgb(255, 255, 240)); }
+static void screen(int x0, int y0, int x1, int y1) { dirty(x0, y0, x1, y1); fill(x0, y0, x1, y1, C_SCREEN); clip(x0, y0, x1, y1); }
+static void lamp(int cx, int cy, int r, bool on, uint16_t c) { dirty(cx - r - 1, cy - r - 1, cx + r + 2, cy + r + 2); disc(cx + 0.5f, cy + 0.5f, r, on ? c : C_LAMP_OFF); if (on) pset(cx, cy, rgb(255, 255, 240)); }
 
 static void sNav(const Inst& I, int x0, int y0, int x1, int y1) {          // the Beaver's: where to, how far, the arrow
     screen(x0, y0, x1, y1);
@@ -258,6 +289,7 @@ static void sDigits(int x0, int y0, int x1, int y1, const char* s, uint16_t c) {
     noclip();
 }
 static void bar(int x0, int y0, int x1, int y1, float k, uint16_t c) {
+    dirty(x0, y0, x1, y1);
     fill(x0, y0, x1, y1, C_SCREEN);
     const int h = (int)lroundf((y1 - y0 - 2) * (k < 0 ? 0 : k > 1 ? 1 : k));
     fill(x0 + 1, y1 - 1 - h, x1 - 1, y1 - 1, c);
@@ -382,6 +414,7 @@ static void sStores(const Inst& I, int x0, int y0, int x1, int y1) {         // 
 }
 // the Fighter's head-up display on its combiner glass: the pitch ladder, the waterline, speed, height, heading
 static void sHUD(const Inst& I, int x0, int y0, int x1, int y1) {
+    dirty(x0, y0, x1, y1);
     clip(x0, y0, x1, y1);
     const ViewInfo& v = *I.v;
     const uint16_t K = rgb(8, 34, 18);                   // (a dark edge: the symbols read against a bright sky)
@@ -413,6 +446,7 @@ static void sHUD(const Inst& I, int x0, int y0, int x1, int y1) {
 }
 // a whiskey compass on top of the glare shield (the Cub's): the card's numbers slide past the lubber line
 static void wWhiskey(const Inst& I, int x0, int y0, int x1, int y1) {
+    dirty(x0, y0, x1, y1);
     fill(x0, y0, x1, y1, C_KNOB); frame(x0, y0, x1, y1, C_KNOB_L);
     clip(x0 + 2, y0 + 2, x1 - 2, y1 - 2);
     fill(x0 + 2, y0 + 2, x1 - 2, y1 - 2, C_FACE2);
@@ -549,6 +583,19 @@ void cockpitDraw(const ViewInfo& v, const CockpitLight& L, float t, float wayRel
     throttleLever(I);
     towerButton(I);
     radioStrip(I, a);
+    // what the display sends: the world's rows and windows, and what changed on the panel below them
+    if (!s_dirtyAll) {
+        DisplayRect r[32]; int n = 0;
+        for (int i = 0; i < s_nWin; i++) r[n++] = s_win[i];
+        for (int i = 0; i < s_nDirty && n < 32; i++) {
+            DisplayRect d = s_dirty[i];
+            if (d.y + d.h <= s_top) continue;                         // (inside the rows that go anyway)
+            if (d.y < s_top) { d.h = (int16_t)(d.y + d.h - s_top); d.y = (int16_t)s_top; }
+            r[n++] = d;
+        }
+        displaySetRegions(s_top, r, n);
+    }
+    s_nDirty = 0; s_dirtyAll = false;
 }
 void cockpitOff() {
     if (s_art < 0 || overlayGeneration() != s_gen) { s_art = -1; return; }   // someone else has it now

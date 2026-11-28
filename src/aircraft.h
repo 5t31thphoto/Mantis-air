@@ -15,7 +15,7 @@ namespace mantis {
 enum AircraftId : uint8_t { A_CUB = 0, A_BEAVER, A_JET, A_FIGHTER, A_COUNT };
 enum : uint8_t { GEAR_TAIL = 0, GEAR_TRI, GEAR_FLOATS };
 enum : uint8_t { ENG_BOXER4T = 0, ENG_RADIAL, ENG_V8, ENG_TURBINE };   // the sound models (engine.cpp)
-enum : uint8_t { CRASH_NONE = 0, CRASH_TERRAIN, CRASH_WATER, CRASH_TREE, CRASH_HARD, CRASH_GEAR, CRASH_WING, CRASH_SHOT };
+enum : uint8_t { CRASH_NONE = 0, CRASH_TERRAIN, CRASH_WATER, CRASH_TREE, CRASH_HARD, CRASH_GEAR, CRASH_WING, CRASH_SHOT, CRASH_BUILDING };
 
 struct AircraftSpec {
     const char* name;          // shown in the hangar
@@ -80,6 +80,7 @@ struct AircraftState {
     uint8_t mat, surf;
     uint8_t crash;               // CRASH_* (set once; the game resets)
     float rollOut;               // seconds rolling on the ground since the last touchdown
+    float airT, hopTop;          // since the wheels left the ground: seconds, and the most height gained (a hop or a flight)
     // per-frame events (read and cleared by the game)
     float evTouch;               // touched down: sink rate (m/s)
     float evBump, evSplash, evLift;   // evLift: wheels left the ground
@@ -93,5 +94,7 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
 // Collision with a round obstacle (tree trunk, rock, hangar post) at (ox, oz) radius rad and height top: on the
 // ground it stops you; in the air (below its top) it's a crash. Returns the impact speed.
 float aircraftHitPost(AircraftState& s, uint8_t id, float ox, float oz, float rad, float baseY, float top);
+// The same for a building: a box (cx, cz) facing yaw, halfF along its facing, halfS across, up to top.
+float aircraftHitBox(AircraftState& s, uint8_t id, float cx, float cz, float yaw, float halfF, float halfS, float baseY, float top);
 
 }

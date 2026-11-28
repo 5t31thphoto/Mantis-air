@@ -10,6 +10,10 @@
 #include <chrono>
 #endif
 #include "art_cards.h"
+#include "art_mesh_cub.h"
+#include "art_mesh_beaver.h"
+#include "art_mesh_jet.h"
+#include "art_mesh_fighter.h"
 #include "sprites.h"
 #include "terrain.h"
 #include "journey.h"
@@ -201,8 +205,25 @@ static float s_artLit[3] = {1.f, 1.f, 1.f};      // the scene's light on the her
 static CockpitLight s_cockLight = {{1.f, 1.f, 1.f}, 0.f};   // the cabin's light on the cockpit's art
 static float s_sunDx = 0.f, s_sunDy = 1.f, s_sunDz = 0.f;
 
+static void fogTick() {                                 // the fogged twins follow the palette: one level every 8 frames
+    static uint8_t tick = 0;
+    if (!(tick++ & 7)) { buildFogLevel(palRGB, s_fogLvl); s_fogLvl = (s_fogLvl + 1) & 3; }
+}
 static void buildPalette() {
     const Scene& sc = g_scene;
+    {   // The palette is made from the time of day, the weather, the biomes, the landing light and (toward a low sun) the
+        // heading: it was rebuilt every frame, but they move a visible step only now and then. Rebuilt when one has (and
+        // every frame of a lightning flash, and at least every 2 s).
+        const float yawNow = g_view.photo ? g_view.pYaw : g_view.yaw;
+        const float lowSun = clampf(1.f - sc.sunElev / 0.45f, 0.f, 1.f) * clampf((sc.sunElev + 0.08f) * 12.f, 0.f, 1.f);
+        const float lightsNow = g_view.photo ? 0.f : sc.lights * clampf(1.f - (g_view.agl - 60.f) * (1.f / 140.f), 0.f, 1.f);
+        const int32_t sig[15] = {(int32_t)(sc.tod * 4000.f), (int32_t)(sc.blend * 256.f), (int32_t)(sc.cloud * 64.f), (int32_t)(sc.rain * 64.f),
+            (int32_t)(sc.snow * 64.f), (int32_t)(sc.storm * 64.f), (int32_t)(sc.wet * 64.f), (int32_t)(sc.moon * 64.f), (int32_t)(lightsNow * 64.f),
+            lowSun > 0.f ? (int32_t)(cosf(sc.sunAz - yawNow) * 48.f) + 1000 : 0, sc.biomeA, sc.biomeB, g_view.photo ? 1 : 0, g_view.view, s_veh};
+        static int32_t last[15]; static bool have = false; static uint8_t age = 0;
+        if (have && sc.flash <= 0.f && age < 60 && !memcmp(sig, last, sizeof sig)) { age++; fogTick(); return; }
+        memcpy(last, sig, sizeof sig); have = true; age = 0;
+    }
     const Biome& A = biome(sc.biomeA); const Biome& B = biome(sc.biomeB);
     float bl = sc.blend;
     S = sampleKey(sc.tod);
@@ -388,10 +409,7 @@ static void buildPalette() {
     s_fogRGB[0] = clampf(S.fog.r, 0.f, 255.f); s_fogRGB[1] = clampf(S.fog.g, 0.f, 255.f); s_fogRGB[2] = clampf(S.fog.b, 0.f, 255.f);
     static bool fogMade = false;
     if (!fogMade) { for (int l = 0; l < 4; l++) buildFogLevel(palRGB, l); fogMade = true; }
-    else {                                                  // the palette drifts slowly: one level every 8 frames
-        static uint8_t tick = 0;
-        if (!(tick++ & 7)) { buildFogLevel(palRGB, s_fogLvl); s_fogLvl = (s_fogLvl + 1) & 3; }
-    }
+    else fogTick();
 }
 
 // ramp tables for reflections and light shafts (static: built once)
@@ -488,7 +506,7 @@ static void setupCamera() {
 }
 
 // ================================================================================== terrain
-struct Smp { float h, a, al, lt; uint8_t mat, surf, half, extra; };
+struct Smp { float h, lt; uint8_t mat, surf, extra; };   // (Rally's road distances are gone: Air has no roads)
 static uint8_t* s_tex = nullptr;            // 64x64 value noise, 0..255
 static inline int tex(int u, int v) { return s_tex[((v & 63) << 6) | (u & 63)]; }
 // The dither for the ground, water and road: the same world-position texture lookup the ground's own detail uses
@@ -565,17 +583,13 @@ static inline __attribute__((always_inline)) void probeAttr(const Probe& p, Smp&
     const Cell& n = probeNearest(p);
     const float tx = p.tx, tz = p.tz;
     s.h = p.h;
-    if (p.lite) { s.a = n.across * 0.02f; s.lt = cellLight(*p.g, n); }
+    if (p.lite) s.lt = cellLight(*p.g, n);
     else {
-        float a0 = a.across + (b.across - a.across) * tx, a1 = c.across + (d.across - c.across) * tx;
-        s.a = (a0 + (a1 - a0) * tz) * 0.02f;
         const float la = cellLight(*p.g, a), lb = cellLight(*p.g, b), lc = cellLight(*p.g, c), ld = cellLight(*p.g, d);
         float l0 = la + (lb - la) * tx, l1 = lc + (ld - lc) * tx;
         s.lt = l0 + (l1 - l0) * tz;
     }
-    s.al = n.along * 0.05f;
     s.mat = n.mat & 15; s.surf = n.mat >> 4; s.extra = n.extra;
-    s.half = (s.mat == MAT_ROAD || s.mat == MAT_SHOULDER) ? (n.extra & 0x7F) : 68;   // (bit 7: a tunnel)
 }
 static float s_lwNear = 0.f;                // z * 0.55 below this: the paint is at its minimum width (no divide needed)
 
@@ -670,7 +684,7 @@ __attribute__((noinline)) static uint8_t runwayPix(int x, int y, float wx, float
 }
 
 // one ground pixel. Returns the palette index; sets *refl for water / wet surfaces.
-static inline uint8_t groundPix(int x, int y, float wx, float wz, float a, float al, float half, float lt, float z, float hgt,
+static inline uint8_t groundPix(int x, int y, float wx, float wz, float lt, float z, float hgt,
                                 uint8_t mat, uint8_t surf, bool farSmp, uint8_t extra, bool& refl) {
     int scl = z < 12.f ? 5 : (z < 35.f ? 2 : 1);
     const int tu = (int)(wx * scl), tv = (int)(wz * scl);
@@ -683,47 +697,8 @@ static inline uint8_t groundPix(int x, int y, float wx, float wz, float a, float
     if (s_reliefK > 0.f && !(((tv + s_rdv) ^ tv) & ~63) && !(((tu + s_rdu) ^ tu) & ~63))
         s += (float)(n - tex(tu + s_rdu, tv + s_rdv)) * s_reliefK;
     if (s_lights > 0.02f && z < 75.f) s += s_lights * beamC[x] * (10.f * HEAD_K) * (z + 3.f <= 11.f ? 1.f : fminf(1.f, 11.f / (z + 3.f))) * (0.35f + 0.65f * s_night);
-    float aa = fabsf(a);
     uint8_t c;
-    if (aa < half && mat != MAT_WATER) {
-        if (surf == SURF_TARMAC) {
-            const float lz = z * 0.55f;
-            // paint never thinner than ~half a pixel (no flicker up close); once widened, it's only a share of those pixels:
-            // past ~30 m the line is drawn as asphalt brightened by that share (it had covered the whole road far off)
-            float lw = 0.10f, cov = 1.f;
-            if (lz >= s_lwNear) { lw = lz / F; cov = 0.10f / lw; }
-            int lv = clampi(band(s * 0.9f + 1.f, x, y), 0, 15);
-            c = (uint8_t)(P_ROAD + lv);
-            if (z < 25.f && tex((int)(wx * 9.f), (int)(wz * 9.f)) > 228) c = (uint8_t)(P_ROAD + clampi(lv + 2, 0, 15));
-            float e = fabsf(aa - (half - 0.32f));
-            float m = al;
-            float sl = s * 0.25f + 0.2f;
-            if (e < lw) c = cov > 0.6f ? (uint8_t)(P_LINE_W + clampi((int)sl, 0, 3)) : (uint8_t)(P_ROAD + clampi(band(s * 0.9f + 1.f + cov * 9.f, x, y), 0, 15));
-            else if (aa < lw + 0.05f && m < 4.6f) c = cov > 0.6f ? (uint8_t)(P_LINE_Y + clampi((int)sl, 0, 3)) : (uint8_t)(P_ROAD + clampi(band(s * 0.9f + 1.f + cov * 6.f, x, y), 0, 15));
-            if (s_wet > 0.25f) refl = true;
-        } else if (surf == SURF_SNOW) {
-            float rut = fabsf(aa - half * 0.48f);
-            int lv = (int)(s * 0.5f + 1.5f - (rut < 0.45f ? 2.f : 0.f) + dith(x, y));
-            c = (uint8_t)(P_SNOW + clampi(lv, 0, 7));
-        } else {
-            float rut = fabsf(aa - half * 0.48f);
-            float sh = s + 1.0f;
-            if (rut < 0.5f) sh -= surf == SURF_MUD ? 3.f : 1.8f;
-            if (aa < 0.45f) sh += 0.8f;
-            if (surf == SURF_GRAVEL && z < 22.f && tex((int)(wx * 11.f), (int)(wz * 11.f)) > 205) sh += 3.f;
-            if (surf == SURF_SAND) sh += 1.5f + sinf(wx * 1.3f + wz * 0.7f) * 0.8f;
-            if (surf == SURF_DIRT) sh -= 0.6f;
-            c = (uint8_t)(P_SOIL + clampi(band(sh, x, y), 0, 15));
-            if (surf == SURF_MUD) {
-                c = (uint8_t)(P_SOIL + clampi(band(sh * 0.7f - 1.f, x, y), 0, 15));
-                if (rut < 0.55f && tex((int)(wx * 1.5f), (int)(wz * 1.5f)) > 120) refl = true;
-            } else if (s_wet > 0.5f && rut < 0.4f && tex((int)(wx * 1.2f), (int)(wz * 1.2f)) > 170) refl = true;
-        }
-    } else if (aa < half + 1.3f && mat != MAT_WATER) {
-        int lv = band(s * 0.9f + (s_paved > 0.5f ? 1.f : 0.f), x, y);
-        c = (uint8_t)(P_SOIL + clampi(lv, 0, 15));
-        if (nf > 0.62f && aa > half + 0.7f) c = (uint8_t)(P_GRASS + clampi(lv, 0, 15));
-    } else {
+    {   // (Rally's road paint, ruts and shoulders were here: Air has no roads)
         switch (mat) {
             case MAT_WATER: {
                 int r = (int)((nf - 0.5f) * 4.f + 3.f + (z < 20.f ? 1.f : 0.f));
@@ -778,6 +753,7 @@ __attribute__((noinline)) static float nearSafeZ(const Grid& gN, float ddx, floa
 // cores draw them, taking blocks of columns from one counter: the second core (a task below the sound and the screen)
 // takes what its spare time allows and this one the rest. The pixels are exactly those of one core drawing them all.
 static float s_landReach = 1e9f;                    // how far ahead the land goes this frame (m)
+static volatile bool s_anyRefl = false;             // this frame's land has water or a wet surface in view (else no reflection passes)
 static int s_tNext = 0;                             // the next block of columns
 static float s_tZFar = 0.f;
 static constexpr int TCOLS = 4;
@@ -807,8 +783,8 @@ MR_HOT static void terrainColumns() {
             // picture: start there (no land can rise into the picture nearer than that)
             if (above > 0.f && (float)y - 1.f > hx + 0.5f) { const float zs = above * F / ((float)y - 1.f - hx) * 0.97f; if (zs > z) z = zs; }
             // previous sample (for per-pixel interpolation)
-            float pY = (float)H + 40.f, pz = z, pwx = cx + ddx * z, pwz = cz + ddz * z, pa = 600.f, pal = 0.f, plt = 0.5f, ph = cy - 2.f;
-            uint8_t pmat = 0, psurf = 0, phalf = 68, pextra = 0; bool pfar = false;
+            float pY = (float)H + 40.f, pz = z, pwx = cx + ddx * z, pwz = cz + ddz * z, plt = 0.5f, ph = cy - 2.f;
+            uint8_t pmat = 0, psurf = 0, pextra = 0; bool pfar = false;
             bool first = true;
             int lvl = 0;                     // which cache the ray is in: 0 near, 1 far, 2 vast (it only ever moves out)
             bool pHave = false;              // the previous sample's road distance, light and material are worked out
@@ -851,22 +827,14 @@ MR_HOT static void terrainColumns() {
                     if (!pYok) { pY = hx - (ph - cy) * F / pz; pYok = true; }      // exactly the row it would have had
                     for (int k = pHave ? 1 : 0; k < 2; k++) probeAttr(k ? pr : pp, k ? s : q);
                     if (s_cloudAmt > 0.f) { s.lt *= cloudK(wx, wz); if (!pHave) q.lt *= cloudK(pwx, pwz); }   // cloud shadows
-                    if (!pHave) { pa = q.a; pal = q.al; plt = q.lt; pmat = q.mat; psurf = q.surf; phalf = q.half; pextra = q.extra; }
+                    if (!pHave) { plt = q.lt; pmat = q.mat; psurf = q.surf; pextra = q.extra; }
                     float span = pY - ys;
                     float inv = span > 0.001f ? 1.f / span : 0.f;
                     float fogNear = fogAt(pz), fogFar = fogAt(z);
-                    const bool pRoad = pmat == MAT_ROAD || pmat == MAT_SHOULDER, cRoad = s.mat == MAT_ROAD || s.mat == MAT_SHOULDER;
-                    // two roads side by side at different heights (the narrow shelf): the face between them is a cut wall
-                    const float legDh = s.h - ph;
-                    const bool legWall = pRoad && cRoad && fabsf(legDh) > 1.5f + 0.15f * (z - pz);
-                    const float legLow = legDh > 0.f ? ph : s.h;
                     for (int yy = y - 1; yy >= yTop; yy--) {
                         float t = clampf((pY - yy) * inv, 0.f, 1.f);
                         float zz = pz + (z - pz) * t;
                         float wxx = pwx + (wx - pwx) * t, wzz = pwz + (wz - pwz) * t;
-                        float aa = pa + (s.a - pa) * t;
-                        float dal = s.al - pal; if (dal > 6.4f) dal -= 12.8f; else if (dal < -6.4f) dal += 12.8f;
-                        float al = pal + dal * t; if (al < 0.f) al += 12.8f;
                         float lt = plt + (s.lt - plt) * t;
                         float hg = ph + (s.h - ph) * t;
                         // this spot of ground's own grain: only worked out where it matters (an edge between materials,
@@ -876,21 +844,8 @@ MR_HOT static void terrainColumns() {
                         if (edge) sd = surfDith(wxx, wzz, zz);
                         bool useCur = edge ? t > sd : t > 0.5f;
                         uint8_t mat = useCur ? s.mat : pmat, surf = useCur ? s.surf : psurf;
-                        float half = (useCur ? s.half : phalf) * 0.05f;
-                        if (legWall) {
-                            if (hg - legLow > 0.35f) { aa = half + 9.f; mat = MAT_ROCK; surf = SURF_ROCK; }
-                        } else {
-                            // a wall face rising beside the road is wall, not road: road paint only at the road's own height
-                            float aaPix = fabsf(aa);
-                            if (aaPix < half + 1.3f) {
-                                if (pRoad != cRoad) {
-                                    float roadH = pRoad ? ph : s.h;
-                                    if (hg - roadH > 0.35f) { aa = (aa < 0.f ? -1.f : 1.f) * (half + 9.f); mat = pRoad ? s.mat : pmat; surf = pRoad ? s.surf : psurf; }
-                                }
-                            }
-                        }
                         bool refl = false;
-                        uint8_t c = groundPix(x, yy, wxx, wzz, aa, al, half, lt, zz, hg, mat, surf, useCur ? far : pfar, useCur ? s.extra : pextra, refl);
+                        uint8_t c = groundPix(x, yy, wxx, wzz, lt, zz, hg, mat, surf, useCur ? far : pfar, useCur ? s.extra : pextra, refl);
                         float fg = fogNear + (fogFar - fogNear) * t;
                         {                                                   // fog: the palette way, stepping to fogged twins
                             float fa = clampf((fg - 0.3f) * (1.f / 0.42f), 0.f, 1.f);
@@ -910,12 +865,13 @@ MR_HOT static void terrainColumns() {
                             zHi = zcC >= 252 ? 1e30f : zdepth(zcC + 2) * 0.999f;
                         }
                         zb[i] = (uint8_t)(zcC | (refl ? 1 : 0));
+                        if (refl) s_anyRefl = true;
                         bool mistRow = s_mistOn && yy >= mist0 && yy < mist1;   // only the mist band's rows
                         if (s_gpat && (refl || mistRow)) { if (sd < 0.f) sd = surfDith(wxx, wzz, zz); s_gpat[i] = (uint8_t)(sd * 255.f); }
                     }
                     y = yTop;
                     pY = ys; pYok = true;
-                    pa = s.a; pal = s.al; plt = s.lt; pmat = s.mat; psurf = s.surf; phalf = s.half; pextra = s.extra; pHave = true;
+                    plt = s.lt; pmat = s.mat; psurf = s.surf; pextra = s.extra; pHave = true;
                 } else {
                     pYok = false; pHave = false;            // its row and the rest only if the next sample draws
                 }
@@ -937,6 +893,7 @@ static void terrainWorker(void*) {
 #endif
 static void drawTerrain(float zFar) {
     s_tZFar = zFar;
+    s_anyRefl = false;
     s_lwNear = 0.0999f * F;
     __atomic_store_n(&s_tNext, 0, __ATOMIC_RELEASE);
 #ifndef HOST
@@ -1858,7 +1815,7 @@ static void buildWetTables() {
 MR_HOT static void reflectPass() {
     const float t = s_t;
     for (int x = 0; x < W; x++) {
-        for (int y = (int)horX[x] + 1; y < H; y++) {
+        for (int y = (int)horX[x] + 1; y < s_bottom[x]; y++) {       // (not under the cockpit's panel)
             if (y < 0) continue;
             int i = y * W + x;
             if (!(zb[i] & 1)) continue;
@@ -2100,7 +2057,7 @@ static const uint8_t s_bayer8[64] = {
 
 struct TexRef { const uint8_t* px; int w, h, stride; };    // 4 bits a texel, 0 transparent
 struct TV { float x, y, iw, uw, vw; };                       // on screen; 1/depth; u/depth, v/depth (texels)
-struct TriStyle { const uint8_t* lut; uint8_t dLo, dHi; const uint8_t (*skip)[4]; int nSkip; };   // colours; dither band; gear boxes
+struct TriStyle { const uint8_t* lut; uint8_t dLo, dHi; const uint8_t (*skip)[4]; int nSkip; uint8_t fill; };   // colours; dither band; gear boxes; (models) the colour where the texture's empty, 0: see-through
 static inline uint8_t texel(const TexRef& t, int u, int v) {
     const uint8_t b = t.px[v * t.stride + (u >> 1)];
     return (u & 1) ? (b & 15) : (b >> 4);
@@ -2137,12 +2094,17 @@ static void texTri(const TV& A, const TV& B, const TV& C, const TexRef& t, const
             const float iw = A.iw * w0 + B.iw * w1 + C.iw * w2;
             const float dep = 1.f / iw;
             const int u = (int)((A.uw * w0 + B.uw * w1 + C.uw * w2) * dep), v = (int)((A.vw * w0 + B.vw * w1 + C.vw * w2) * dep);
-            if ((unsigned)u >= (unsigned)t.w || (unsigned)v >= (unsigned)t.h) continue;
-            bool hid = false;
-            for (int g = 0; g < st.nSkip; g++) if (u >= st.skip[g][0] && v >= st.skip[g][1] && u < st.skip[g][2] && v < st.skip[g][3]) { hid = true; break; }
-            if (hid) continue;
-            const uint8_t c = texel(t, u, v);
-            if (!c) continue;
+            uint8_t col;
+            if ((unsigned)u >= (unsigned)t.w || (unsigned)v >= (unsigned)t.h) { if (!st.fill) continue; col = st.fill; }
+            else {
+                bool hid = false;
+                for (int g = 0; g < st.nSkip; g++) if (u >= st.skip[g][0] && v >= st.skip[g][1] && u < st.skip[g][2] && v < st.skip[g][3]) { hid = true; break; }
+                if (hid) continue;
+                const uint8_t c = texel(t, u, v);
+                if (c) col = st.lut[c];
+                else if (st.fill) col = st.fill;
+                else continue;
+            }
             const int pi = y * W + x;
             const uint16_t dz = (uint16_t)fminf(dep * 64.f, 65535.f);
             if (s_acSt[pi] == s_acId) { if (s_acZ[pi] <= dz) continue; }
@@ -2151,7 +2113,7 @@ static void texTri(const TV& A, const TV& B, const TV& C, const TexRef& t, const
                 if (wz <= s_acZcN) continue;                        // the world in front of all of it
                 if (wz < s_acZcF && wz <= zcode(dep)) continue;
             }
-            fb[pi] = st.lut[c]; s_acZ[pi] = dz; s_acSt[pi] = s_acId;
+            fb[pi] = col; s_acZ[pi] = dz; s_acSt[pi] = s_acId;
             if (x < s_acX0) s_acX0 = x;
             if (x > s_acX1) s_acX1 = x;
             if (y < s_acY0) s_acY0 = y;
@@ -2190,6 +2152,78 @@ static void acLuts() {
         s_lutLit[i] = (uint8_t)(P_VEH + i); s_lutShade[i] = (uint8_t)(P_COCK + i);
         s_lutNpcLit[i] = s_npcCol[i][1]; s_lutNpcShade[i] = s_npcCol[i][0];
     }
+}
+// the afterburners (the parts column's flame and its glow, in colours that glow): open past 70% throttle, the
+// flame as two crossed cards trailing from each nozzle (it reads from the side and from above), the glow facing aft
+// (what you see from behind); flickering. L, S, Hh: the cards' length, span, height; bf, bu, br: the view (body frame);
+// tailF: where the nozzles are along the flight line
+static void drawFlames(const PlaneArt& A, const ACPose& P, float L, float S, float upBase, float Hh, float bf, float bu, float br, float pxPerM, float rpm01, float tailF) {
+    if (A.nNozzle && A.flame && A.glow && rpm01 > 0.7f) {
+        static const uint8_t FL[16] = FLAME_LUT_INIT;
+        const float k = (rpm01 - 0.7f) / 0.3f;
+        for (int n = 0; n < A.nNozzle; n++) {
+            const float nf = tailF, nr = A.nozzle[n][0] * S, nu = upBase + A.nozzle[n][1] * Hh;
+            const float flick = 0.85f + 0.3f * hashf((uint32_t)(s_t * 30.f) * 7u + n);
+            // seen end-on from behind, a trailing card would come at the camera as a slab: there the glow carries it
+            // and the flame shortens away (fully gone looking straight up the pipe)
+            const float endOn = fminf(1.f, fmaxf(0.f, (0.92f - bf) / 0.3f));
+            const float len = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * (bf > 0.f ? endOn : 1.f);
+            const float hh = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * A.flame->h[0] / A.flame->w[0] * 0.5f;
+            TriStyle st = {FL, 0, 255, nullptr, 0};
+            for (int c = 0; c < 3; c++) {
+                if (c == 0 && (fabsf(br) < 0.22f || len < 0.3f)) continue;     // edge-on, or too short to show
+                if (c == 1 && (fabsf(bu) < 0.22f || len < 0.3f)) continue;
+                if (c == 2 && bf < 0.15f) continue;                              // the glow faces aft
+                const Card& cd = c < 2 ? *A.flame : *A.glow;
+                int mip = 0;
+                const float sz = c < 2 ? len : hh * 2.4f;
+                while (mip < 2 && cd.w[mip + 1] >= sz * pxPerM) mip++;
+                TexRef t = {cd.px + cd.off[mip], cd.w[mip], cd.h[mip], (cd.w[mip] + 1) >> 1};
+                // corners (forward, up, right): c 0 side card (forward-up), 1 top card (forward-right), 2 the glow
+                float cf[4], cu2[4], cr2[4];
+                if (c == 0) { const float f_[4] = {nf, nf - len, nf - len, nf}, u_[4] = {nu + hh, nu + hh, nu - hh, nu - hh};
+                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = u_[e]; cr2[e] = nr; } }
+                else if (c == 1) { const float f_[4] = {nf, nf - len, nf - len, nf}, r_[4] = {nr - hh, nr - hh, nr + hh, nr + hh};
+                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = nu; cr2[e] = r_[e]; } }
+                else {  // the glow sits on the nozzle as the rear card draws it: that card stands at the body's middle, so
+                        // straight from behind the glow goes there, sliding back to the tail as the view turns side-on
+                       const float gf = tailF * fminf(1.f, fmaxf(0.f, (0.95f - bf) / 0.6f)) - 0.05f;
+                       const float g = hh * 0.6f, u_[4] = {nu + g, nu + g, nu - g, nu - g}, r_[4] = {nr - g, nr + g, nr + g, nr - g};
+                       for (int e = 0; e < 4; e++) { cf[e] = gf; cu2[e] = u_[e]; cr2[e] = r_[e]; } }
+                TV v[4]; bool ok = true;
+                const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
+                for (int e = 0; e < 4 && ok; e++) {
+                    ok = acProject(P, cf[e], cu2[e], cr2[e], v[e]);
+                    v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
+                }
+                if (!ok) continue;
+                texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
+            }
+        }
+}
+}
+// a prop: the parts column's sprite, face on, a quad at its hub across the flight line, turning. Its blades at idle;
+// spun up, its blur disc at half density (see-through). In depth with the rest of the aircraft, so a wing hides it.
+static void drawProp(const PlaneArt& A, const ACPose& P, float hf, float hu, float hr, float R, int p, float pxPerM, bool npc, float rpm01) {
+    const bool blur = rpm01 > 0.35f;
+    const Card& pc = blur ? *A.disc : *A.blade;
+    const float spin = blur ? s_t * 2.5f : s_t * (1.f + rpm01 * 30.f);
+    const float a = spin + p * 1.1f, ca = cosf(a), sa = sinf(a);
+    // the quad's corners in the body frame (in the right-up plane), rotated by the spin
+    const float e1r = ca * R, e1u = sa * R, e2r = -sa * R, e2u = ca * R;
+    const float cr[4] = {-e1r + e2r, e1r + e2r, e1r - e2r, -e1r - e2r}, cu[4] = {-e1u + e2u, e1u + e2u, e1u - e2u, -e1u - e2u};
+    int mip = 0;
+    while (mip < 2 && pc.w[mip + 1] >= 2.f * R * pxPerM) mip++;
+    TexRef t = {pc.px + pc.off[mip], pc.w[mip], pc.h[mip], (pc.w[mip] + 1) >> 1};
+    TV v[4];
+    const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
+    for (int e = 0; e < 4; e++) {
+        if (!acProject(P, hf, hu + cu[e], hr + cr[e], v[e])) return;
+        v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
+    }
+    TriStyle st = {npc ? s_lutNpcLit : s_lutLit, 0, (uint8_t)(blur ? 128 : 255), nullptr, 0};
+    if (!blur) st.dHi = 255;
+    texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
 }
 // the cards: the one(s) the camera faces, as quads in the aircraft's frame
 static void drawCards(const PlaneArt& A, const ACPose& P, float span, float upBase, bool gearDown, bool npc, float rpm01) {
@@ -2251,79 +2285,85 @@ static void drawCards(const PlaneArt& A, const ACPose& P, float span, float upBa
         if (!ok) continue;
         texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
     }
-    // the props (the parts column's sprites, face on): a quad at each hub across the flight line, turning. Its blades
-    // at idle; spun up, its blur disc at half density (see-through). In depth with the cards, so a wing hides them.
-    if (A.nProp && A.blade && A.disc) {
-        const bool blur = rpm01 > 0.35f;
-        const Card& pc = blur ? *A.disc : *A.blade;
-        const float spin = blur ? s_t * 2.5f : s_t * (1.f + rpm01 * 30.f);
-        for (int p = 0; p < A.nProp; p++) {
-            const float hf = A.prop[p][0] * L, hr = A.prop[p][1] * S, hu = upBase + A.prop[p][2] * Hh, R = A.prop[p][3] * S;
-            const float a = spin + p * 1.1f, ca = cosf(a), sa = sinf(a);
-            // the quad's corners in the body frame (in the right-up plane), rotated by the spin
-            const float e1r = ca * R, e1u = sa * R, e2r = -sa * R, e2u = ca * R;
-            const float cr[4] = {-e1r + e2r, e1r + e2r, e1r - e2r, -e1r - e2r}, cu[4] = {-e1u + e2u, e1u + e2u, e1u - e2u, -e1u - e2u};
-            int mip = 0;
-            while (mip < 2 && pc.w[mip + 1] >= 2.f * R * pxPerM) mip++;
-            TexRef t = {pc.px + pc.off[mip], pc.w[mip], pc.h[mip], (pc.w[mip] + 1) >> 1};
-            TV v[4]; bool ok = true;
-            const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
-            for (int e = 0; e < 4 && ok; e++) {
-                ok = acProject(P, hf, hu + cu[e], hr + cr[e], v[e]);
-                v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
-            }
-            if (!ok) continue;
-            TriStyle st = {npc ? s_lutNpcLit : s_lutLit, 0, (uint8_t)(blur ? 128 : 255), nullptr, 0};
-            if (!blur) st.dHi = 255;
-            texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
-        }
+    // the props (the parts column's sprites, face on): a quad at each hub across the flight line, turning
+    if (A.nProp && A.blade && A.disc)
+        for (int p = 0; p < A.nProp; p++) drawProp(A, P, A.prop[p][0] * L, upBase + A.prop[p][2] * Hh, A.prop[p][1] * S, A.prop[p][3] * S, p, pxPerM, npc, rpm01);
+    drawFlames(A, P, L, S, upBase, Hh, bf, bu, br, pxPerM, rpm01, -L * 0.5f);
+}
+// ---- the models (art_mesh.h): the aircraft as a solid, textured from its own cards (the same texels), each face lit
+// or shaded as the cards are (the sun on its normal), back faces skipped. Its silhouette gets the same outline.
+static const MeshArt* const MESHES[8] = {&MESH_CUB, &MESH_BEAVER, &MESH_JET, &MESH_FIGHTER, nullptr, nullptr, nullptr, nullptr};
+static bool drawMesh(const MeshArt& M, const PlaneArt& A, const ACPose& P, float span, float upBase, bool gearDown, bool npc, float rpm01) {
+    // (the projected corners: in PSRAM, made once, for the biggest model)
+    static TV* pv = nullptr; static float (*pb)[3] = nullptr; static uint8_t* pok = nullptr;
+    enum { MAXV = 1024 };
+    if (!pv) { pv = (TV*)memSlow(sizeof(TV) * MAXV); pb = (float (*)[3])memSlow(sizeof(float) * 3 * MAXV); pok = (uint8_t*)memSlow(MAXV); }
+    if (!pv || !pb || !pok || M.nV > MAXV) return false;
+    const float s = span / M.span, du = upBase + M.gearH * s;     // (the model's wheels where the pose puts them)
+    const float dc = (P.x - cx) * fx + (P.z - cz) * fz, rad = span * 0.6f;
+    if (dc < rad * 0.35f || dc > 7000.f) return true;
+    s_acZcN = zcode(fmaxf(dc - rad, 0.3f)); s_acZcF = zcode(dc + rad);
+    const float pxPerM = F / dc;
+    // the cards' texels at about a texel a pixel (the top card spans the wings)
+    const Card* C[4] = {&A.top, &A.side, &A.front, &A.rear};
+    int mip = 0;
+    while (mip < 2 && A.top.w[mip + 1] >= span * pxPerM) mip++;
+    TexRef tex[4]; float su[4], sv[4];
+    for (int k = 0; k < 4; k++) {
+        const Card& c = *C[k];
+        if (!c.w[0]) { tex[k].px = nullptr; continue; }
+        tex[k] = {c.px + c.off[mip], c.w[mip], c.h[mip], (c.w[mip] + 1) >> 1};
+        su[k] = (float)c.w[mip] / (16.f * c.w[0]); sv[k] = (float)c.h[mip] / (16.f * c.h[0]);
     }
-    // the afterburners (the parts column's flame and its glow, in colours that glow): open past 70% throttle, the
-    // flame as two crossed cards trailing from each nozzle (it reads from the side and from above), the glow facing
-    // aft (what you see from behind); flickering
-    if (A.nNozzle && A.flame && A.glow && rpm01 > 0.7f) {
-        static const uint8_t FL[16] = FLAME_LUT_INIT;
-        const float k = (rpm01 - 0.7f) / 0.3f;
-        for (int n = 0; n < A.nNozzle; n++) {
-            const float nf = -L * 0.5f, nr = A.nozzle[n][1] * 0.f + A.nozzle[n][0] * S, nu = upBase + A.nozzle[n][1] * Hh;
-            const float flick = 0.85f + 0.3f * hashf((uint32_t)(s_t * 30.f) * 7u + n);
-            // seen end-on from behind, a trailing card would come at the camera as a slab: there the glow carries it
-            // and the flame shortens away (fully gone looking straight up the pipe)
-            const float endOn = fminf(1.f, fmaxf(0.f, (0.92f - bf) / 0.3f));
-            const float len = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * (bf > 0.f ? endOn : 1.f);
-            const float hh = A.nozzle[n][2] * L * (0.35f + 0.65f * k) * flick * A.flame->h[0] / A.flame->w[0] * 0.5f;
-            TriStyle st = {FL, 0, 255, nullptr, 0};
-            for (int c = 0; c < 3; c++) {
-                if (c == 0 && (fabsf(br) < 0.22f || len < 0.3f)) continue;     // edge-on, or too short to show
-                if (c == 1 && (fabsf(bu) < 0.22f || len < 0.3f)) continue;
-                if (c == 2 && bf < 0.15f) continue;                              // the glow faces aft
-                const Card& cd = c < 2 ? *A.flame : *A.glow;
-                int mip = 0;
-                const float sz = c < 2 ? len : hh * 2.4f;
-                while (mip < 2 && cd.w[mip + 1] >= sz * pxPerM) mip++;
-                TexRef t = {cd.px + cd.off[mip], cd.w[mip], cd.h[mip], (cd.w[mip] + 1) >> 1};
-                // corners (forward, up, right): c 0 side card (forward-up), 1 top card (forward-right), 2 the glow
-                float cf[4], cu2[4], cr2[4];
-                if (c == 0) { const float f_[4] = {nf, nf - len, nf - len, nf}, u_[4] = {nu + hh, nu + hh, nu - hh, nu - hh};
-                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = u_[e]; cr2[e] = nr; } }
-                else if (c == 1) { const float f_[4] = {nf, nf - len, nf - len, nf}, r_[4] = {nr - hh, nr - hh, nr + hh, nr + hh};
-                              for (int e = 0; e < 4; e++) { cf[e] = f_[e]; cu2[e] = nu; cr2[e] = r_[e]; } }
-                else {  // the glow sits on the nozzle as the rear card draws it: that card stands at the body's middle, so
-                        // straight from behind the glow goes there, sliding back to the tail as the view turns side-on
-                       const float gf = -L * 0.5f * fminf(1.f, fmaxf(0.f, (0.95f - bf) / 0.6f)) - 0.05f;
-                       const float g = hh * 0.6f, u_[4] = {nu + g, nu + g, nu - g, nu - g}, r_[4] = {nr - g, nr + g, nr + g, nr - g};
-                       for (int e = 0; e < 4; e++) { cf[e] = gf; cu2[e] = u_[e]; cr2[e] = r_[e]; } }
-                TV v[4]; bool ok = true;
-                const float uu[4] = {0, 1, 1, 0}, vv[4] = {0, 0, 1, 1};
-                for (int e = 0; e < 4 && ok; e++) {
-                    ok = acProject(P, cf[e], cu2[e], cr2[e], v[e]);
-                    v[e].uw = uu[e] * t.w * v[e].iw; v[e].vw = vv[e] * t.h * v[e].iw;
-                }
-                if (!ok) continue;
-                texTri(v[0], v[1], v[2], t, st); texTri(v[0], v[2], v[3], t, st);
-            }
-        }
+    static const uint8_t SOLID[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    // the camera in the body frame (for the back faces)
+    const float dx = cx - P.x, dy = cy - P.y, dz = cz - P.z;
+    const float cf = dx * P.f[0] + dy * P.f[1] + dz * P.f[2], cu = dx * P.u[0] + dy * P.u[1] + dz * P.u[2], cr = dx * P.r[0] + dy * P.r[1] + dz * P.r[2];
+    for (int i = 0; i < M.nV; i++) {
+        pb[i][0] = M.v[i * 3] * s; pb[i][1] = M.v[i * 3 + 1] * s + du; pb[i][2] = M.v[i * 3 + 2] * s;
+        pok[i] = acProject(P, pb[i][0], pb[i][1], pb[i][2], pv[i]);
     }
+    const uint8_t* lutL = npc ? s_lutNpcLit : s_lutLit;
+    const uint8_t* lutS = npc ? s_lutNpcShade : s_lutShade;
+    for (int k = 0; k < M.nT; k++) {
+        const MeshTri& T = M.t[k];
+        if ((T.card & 0x80) && !gearDown) continue;                  // (retracting gear: stowed)
+        const int card = T.card & 0x7F;
+        const int a = T.i[0], b = T.i[1], c = T.i[2];
+        if (!pok[a] || !pok[b] || !pok[c]) continue;
+        const float nf = T.n[0] * (1.f / 127.f), nu = T.n[1] * (1.f / 127.f), nr = T.n[2] * (1.f / 127.f);
+        if (nf * (pb[a][0] - cf) + nu * (pb[a][1] - cu) + nr * (pb[a][2] - cr) >= 0.f) continue;     // facing away
+        const float n0 = P.f[0] * nf + P.u[0] * nu + P.r[0] * nr, n1 = P.f[1] * nf + P.u[1] * nu + P.r[1] * nr, n2 = P.f[2] * nf + P.u[2] * nu + P.r[2] * nr;
+        const bool lit = (n0 * s_sunDx + n1 * s_sunDy + n2 * s_sunDz) * s_sunK + n1 * 0.3f > 0.05f;
+        const uint8_t* lut = lit ? lutL : lutS;
+        TriStyle st = {lut, 0, 255, nullptr, 0, 0};
+        TV A0 = pv[a], B0 = pv[b], C0 = pv[c];
+        TexRef t;
+        if (card >= 4 || !tex[card].px) {                            // a solid colour (or a view this livery hasn't)
+            t = {&SOLID[T.col & 15], 2, 1, 1};
+            A0.uw = A0.vw = B0.uw = B0.vw = C0.uw = C0.vw = 0.f;
+            if (card < 4 && !T.col) continue;
+        } else {
+            t = tex[card];
+            if (T.col) st.fill = lut[T.col & 15];                    // (where the view leaves this face empty)
+            const float fu = su[card], fv = sv[card];
+            A0.uw = T.uv[0][0] * fu * A0.iw; A0.vw = T.uv[0][1] * fv * A0.iw;
+            B0.uw = T.uv[1][0] * fu * B0.iw; B0.vw = T.uv[1][1] * fv * B0.iw;
+            C0.uw = T.uv[2][0] * fu * C0.iw; C0.vw = T.uv[2][1] * fv * C0.iw;
+        }
+        texTri(A0, B0, C0, t, st);
+    }
+    {   // the afterburners: where the cards put them (the cards' frame: wheels at upBase, the middle half way up)
+        const float L = A.len * span, Hh = A.hgt * span, mid = upBase + Hh * 0.5f;
+        const float mx = P.x + P.u[0] * mid - cx, my = P.y + P.u[1] * mid - cy, mz = P.z + P.u[2] * mid - cz, vl = sqrtf(mx * mx + my * my + mz * mz) + 1e-3f;
+        const float bf = (mx * P.f[0] + my * P.f[1] + mz * P.f[2]) / vl, bu = (mx * P.u[0] + my * P.u[1] + mz * P.u[2]) / vl, br = (mx * P.r[0] + my * P.r[1] + mz * P.r[2]) / vl;
+        float tail = 0.f;                                             // (the model's own tail: its aft-most point)
+        if (A.nNozzle) for (int i = 0; i < M.nV; i++) tail = fminf(tail, M.v[i * 3] * s);
+        drawFlames(A, P, L, span, upBase, Hh, bf, bu, br, pxPerM, rpm01, tail);
+    }
+    if (A.nProp && A.blade && A.disc)
+        for (int p = 0; p < M.nProp && p < 2; p++) drawProp(A, P, M.prop[p][0] * s, M.prop[p][1] * s + du, M.prop[p][2] * s, M.prop[p][3] * s, p, pxPerM, npc, rpm01);
+    return true;
 }
 // one aircraft
 #ifdef HOST
@@ -2343,7 +2383,8 @@ static void drawPlaneArtImpl(int art, const ACPose& P, float span, float upBase,
     const bool npc = art >= 4;
     if (!acBegin()) return;
     acLuts();
-    drawCards(*CARDS[art & 7], P, span, upBase, gearDown, npc, rpm01);
+    if (!MESHES[art & 7] || !drawMesh(*MESHES[art & 7], *CARDS[art & 7], P, span, upBase, gearDown, npc, rpm01))
+        drawCards(*CARDS[art & 7], P, span, upBase, gearDown, npc, rpm01);
     acEnd((P.x - cx) * fx + (P.z - cz) * fz, npc ? s_npcCol[1][0] : (uint8_t)(P_VEH + 1));
 }
 #ifdef HOST
@@ -2994,22 +3035,25 @@ void renderFrame() {
     g_riverNear = clampf(1.f - terrainRiverDist(cx, cz) * (1.f / 160.f), 0.f, 1.f) * clampf(1.f - g_view.agl / 300.f, 0.f, 1.f);
     if (g_view.agl < 600.f || g_view.photo) drawVegetation();
     renderTick();
-    drawFarm();
+    const bool low = g_view.agl < 120.f || g_view.photo;      // (cows, fences and deer are a pixel or less from higher up)
+    if (low) drawFarm();
     drawGeysers();
     drawAirfields();
     drawMarks();
-    drawCritters();
+    if (low) drawCritters();
     drawParticles();
     renderTick();
-    if (s_wet > 0.f) buildWetTables();
-    reflectPass();
-    drawGlint();
-    drawFireflies();
+    if (s_anyRefl) {                                 // (no water or wet ground in view: nothing to mirror or glint)
+        if (s_wet > 0.f) buildWetTables();
+        reflectPass();
+        drawGlint();
+    }
+    if (g_view.agl < 60.f || g_view.photo) drawFireflies();   // (around the aircraft on the ground: none up there)
     drawMist();
     drawShafts();
     drawRain();
     drawSnow();
-    drawLeaves();
+    if (g_view.agl < 60.f || g_view.photo) drawLeaves();
     drawInCloud();
     if (g_view.view == VIEW_CHASE || g_view.photo) drawAircraft();
     if (s_capWater) { classifyWater(); s_capWater = false; }
@@ -3079,7 +3123,7 @@ static void topDown(float span, bool capture) {
         } else if (g == gs[0] && (cell.extra & 15) && (cell.extra & 15) < VEG_N && mat != MAT_RUNWAY && mat != MAT_LOT && !(cell.extra & 0x80)) {
             col = (uint8_t)(P_LEAF + clampi((int)(lt * 13.f) - 2, 0, 15));   // a tree's crown
         } else {
-            col = groundPix(x, y, wx, wz, 600.f, 0.f, 3.4f, lt, k * F, h, mat, surf, g != gs[0], cell.extra, refl);
+            col = groundPix(x, y, wx, wz, lt, k * F, h, mat, surf, g != gs[0], cell.extra, refl);
             if (g != gs[0] && cell.extra && cell.extra < 0x80 && mat < MAT_WATER) col = (uint8_t)(P_LEAF + clampi((int)(lt * 12.f) - 1, 0, 15));
         }
         fb[i] = col;

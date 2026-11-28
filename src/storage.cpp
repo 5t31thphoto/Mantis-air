@@ -37,6 +37,7 @@ bool storageInit() {
     displayHoldBus();                                   // the card shares the SPI bus with the LCD
     SPI.begin(GPIO_NUM_18, GPIO_NUM_38, GPIO_NUM_23, GPIO_NUM_4);       // Core2 pins, exactly as MantisPlanet
     s_ok = SD.begin(GPIO_NUM_4, SPI, 25000000);
+    displayBusPins();                                   // (SPI.begin put the LCD's pins on the GPIO matrix: 80 MHz needs the IO MUX)
     if (s_ok) {
         if (!SD.exists("/flight_saves")) SD.mkdir("/flight_saves");
         if (!SD.exists("/images")) SD.mkdir("/images");

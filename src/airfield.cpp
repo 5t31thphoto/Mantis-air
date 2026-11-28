@@ -82,10 +82,10 @@ bool airfieldAt(int i, int j, Airfield& a) {
 }
 
 bool airfieldFits(const Airfield& a, uint8_t id, const char** why) {
-    static const float MINLEN[A_COUNT] = {250.f, 350.f, 1000.f, 1100.f};
+    static const float MINLEN[A_COUNT] = {250.f, 350.f, 440.f, 1100.f};   // (the jet: a cheat, it uses farm strips)
     const bool paved = a.surf == SURF_TARMAC;
     if (a.military && id != A_FIGHTER) { if (why) *why = "MILITARY FIELD, CIVILIANS KEEP OUT"; return false; }
-    if ((id == A_JET || id == A_FIGHTER) && !paved) { if (why) *why = "UNPAVED STRIP, NOT FOR JETS"; return false; }
+    if (id == A_FIGHTER && !paved) { if (why) *why = "UNPAVED STRIP, NOT FOR JETS"; return false; }
     if (a.len < MINLEN[id % A_COUNT]) { if (why) *why = "RUNWAY TOO SHORT FOR YOU"; return false; }
     return true;
 }
@@ -109,6 +109,12 @@ float airfieldLevel(Airfield& a) {
     }
     float y = sum * 0.2f * 0.6f + lo * 0.4f;                    // leaning low: fewer embankments than cuttings
     y = fmaxf(y, terrainWaterLevel(a.x, a.z) + 1.2f);          // never under a lake's level
+    // Another field holds this slot and is still in use: its runway is in the caches, baked at the level remembered
+    // here. A passing question (the hangar's job board asks about a dozen destinations) gets its answer without taking
+    // the slot. (It used to take it: the field you were on was then levelled again from the land as it is now, which the
+    // journey has moved on since, and the runway's next cells were baked at that new height: a step across the runway a
+    // few metres ahead, and a crash on flat ground. Only after the hangar screen; a teleport to the runway didn't help.)
+    if (m.ok && (m.i != a.i || m.j != a.j) && s_clock - m.lastT < 30.f) { a.y = y; return y; }
     m.i = a.i; m.j = a.j; m.y = y; m.lastT = s_clock; m.ok = true;
     a.y = y;
     return y;

@@ -199,7 +199,30 @@ def load_views(src, p):
         v['rear'] = [a_, m_, o_]
     if 'rear' not in v and p.get('rear_standin') and 'front' in v:
         v['rear'] = list(rear_standin(src, p, v))
+    for k in v: v[k][0] = bake_light(v[k][0], v[k][1], k)
     return {k: tuple(x) for k, x in v.items()}
+
+# The sheets are drawn lit from above, with deep shading underneath; in the game the renderer's sun shades the aircraft
+# again on top of that. So the textures are evened out here, once, in the sheets themselves (the cards and the models
+# both take them from here; the renderer is unchanged):
+#   a lift: a gamma on every colour, the dark end most;
+#   a big soft cyan light from below: on the side, front and rear views, strongest at the bottom of each column of the
+#   drawing and fading to nothing at its top (the top view looks down on the upper surfaces: the lift only).
+BAKE_LIFT = 0.80                       # gamma; 1 = as drawn
+BAKE_FILL = 0.55                       # the fill at the very bottom: +55% there
+BAKE_TINT = np.array([0.55, 0.95, 1.0])
+def bake_light(a, m, view):
+    a = 255.0 * (np.clip(a, 0, 255) / 255.0) ** BAKE_LIFT
+    if view == 'top' or not m.any(): return a
+    H_, W_ = m.shape
+    yy = np.arange(H_)[:, None].astype(float)
+    has = m.any(0)
+    top = np.where(has, m.argmax(0), 0).astype(float)
+    bot = np.where(has, H_ - 1 - m[::-1].argmax(0), 1).astype(float)
+    w = np.clip((yy - top[None, :]) / np.maximum(bot - top, 1.0)[None, :], 0, 1)
+    k = np.ones(9) / 9                                               # soft across the columns too (no streaks)
+    w = np.apply_along_axis(lambda r: np.convolve(np.pad(r, 4, mode='edge'), k, 'valid'), 1, w)
+    return np.clip(a * (1.0 + BAKE_FILL * w[..., None] * BAKE_TINT[None, None, :]), 0, 255)
 
 def rear_standin(src, p, v):
     """A rear view made from the front view, until one is drawn (see BEAVER_REAR_STANDIN)."""

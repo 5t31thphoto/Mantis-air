@@ -269,7 +269,7 @@ int main(int argc, char** argv) {
       pitch = ac.ias > A.vStall * 1.15f ? 0.8f : (A.gear == GEAR_TAIL ? -0.2f : 0.f);
     } else {
       airborne = true;
-      helmSetThrottle(A.vProp > 0 ? 0.85f : 0.75f);
+      helmSetThrottle(ac.agl < 150.f ? 1.f : (A.vProp > 0 ? 0.85f : 0.75f));   // (full power for the first climb)
       // heading to the nav target, altitude to cruiseAgl
       float want = gigActive() && g_view.navOk ? atan2f(g_view.navZ - ac.z, g_view.navX - ac.x) : course + 0.4f * sinf(i / 900.f);
       if (ac.agl < 120.f) want = ac.yaw;                  // wings level until clear of the trees

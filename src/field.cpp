@@ -319,7 +319,7 @@ FieldHit fieldCollide(AircraftState& car, uint8_t id) {
     }
     Airfield a;                                                          // the hangar
     if (airfieldAround(car.x, car.z, a)) {
-        float h = aircraftHitPost(car, id, a.hx, a.hz, 15.f, a.y, a.y + 13.f);
+        float h = aircraftHitBox(car, id, a.hx, a.hz, a.hyaw, 12.f, 15.f, a.y, a.y + 13.f);   // (its walls: render.cpp's drawHangar)
         if (h > out.strength) { out.strength = h; out.kind = HIT_STORE; }
     }
     pastureCollide(car, id, out);

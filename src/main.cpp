@@ -160,6 +160,7 @@ static const char* crashWord(uint8_t k, const char** sub) {
         case CRASH_GEAR: *sub = "NOT A RUNWAY FOR THIS ONE"; return "GEAR COLLAPSED";
         case CRASH_WING: return "WINGTIP STRIKE";
         case CRASH_SHOT: return "SHOT DOWN";
+        case CRASH_BUILDING: return "INTO THE HANGAR";
         default: return "CRASHED";
     }
 }
@@ -343,11 +344,13 @@ void loop() {
     const bool wasGround = ac.onGround;
     FieldHit hit = {0.f, HIT_NONE};
     if (!ac.crash) {
-        const int nSub = dt > 0.034f ? 3 : 2;
+        const int nSub = dt > 0.034f && ac.agl < 50.f ? 3 : 2;   // (the third substep is for the ground: cruise needs two)
         for (int k = 0; k < nSub; k++) {
             aircraftStep(ac, air, in, dt / nSub);
-            FieldHit h = fieldCollide(ac, air);
-            if (h.strength > hit.strength) hit = h;
+            if (k == nSub - 1 || ac.speed > 15.f) {              // trees and posts: every substep at speed, once a frame taxiing
+                FieldHit h = fieldCollide(ac, air);
+                if (h.strength > hit.strength) hit = h;
+            }
             if (ac.crash) break;
         }
     }
@@ -560,7 +563,7 @@ void loop() {
     g_car.rpm = A.vProp > 0.f ? ac.rpm : 900.f + 9000.f * ac.rpm01; g_car.rpm01 = ac.rpm01; g_car.throttle = ac.power;
     g_car.boost = 0.f; g_car.spin = 0.f; g_car.slide = ac.onGround ? fminf(1.f, helmCDown() ? ac.groundSpeed / 15.f : 0.f) : 0.f;
     g_car.speed = ac.onGround ? ac.groundSpeed : ac.ias; g_car.water = ac.onWater ? 1.f : 0.f; g_car.surf = ac.surf;
-    g_car.air = !ac.onGround; g_car.limiter = false; g_car.reverse = false; g_car.cockpit = g_prog.view == VIEW_COCKPIT; g_car.deck = 0;
+    g_car.air = !ac.onGround; g_car.limiter = false; g_car.reverse = false; g_car.cockpit = g_prog.view == VIEW_COCKPIT; g_car.deck = 0; g_car.craft = air;
     g_car.stall = ac.stall;
     hx::engine(ac.power, ac.rpm01 * 10.f);
     if (ac.onGround) hx::surface(ac.surf, 0, ac.groundSpeed, 0.f, false);

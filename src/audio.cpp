@@ -103,8 +103,13 @@ void audioRender(int16_t* out, int n) {
     memset(&s_nb, 0, sizeof(s_nb));
     float* nearB = natureNearBuffer(); memset(nearB, 0, sizeof(float) * BLOCK);
     natureBlock(s_nb, n, s_nat);
-    s_natLP.set(g_car.cockpit ? 2400.f : 4200.f, 0.6f);
-    float inCab = g_car.cockpit ? 0.8f : 1.f;
+    // inside, each cabin lets in its own share of the world: the Beaver's open, rattling one the most (the mix as it
+    // was), the Cub's a little less, the Jet's sealed cabin almost none, the Fighter's canopy least of all
+    static const float CAB_K[4] = {0.8f * 0.5f, 0.8f, 0.8f * 0.08f, 0.8f * 0.04f};
+    static const float CAB_LP[4] = {1800.f, 2400.f, 900.f, 700.f};
+    const int cab = g_car.craft & 3;
+    s_natLP.set(g_car.cockpit ? CAB_LP[cab] : 4200.f, 0.6f);
+    float inCab = g_car.cockpit ? CAB_K[cab] : 1.f;
     for (int i = 0; i < n; i++) {
         float d = s_natLP.lp(s_nb.dry[i]) * inCab;
         s_bus.dry[i] += d * 0.8f + nearB[i];               // the car's own impacts and the shutter: right here

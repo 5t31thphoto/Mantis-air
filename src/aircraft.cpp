@@ -4,6 +4,7 @@
 #include "terrain.h"
 #include "journey.h"
 #include "universe.h"
+#include "airfield.h"
 #include <math.h>
 #include <string.h>
 
@@ -193,15 +194,21 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
     const float plate = 0.95f * sinf(2.f * alpha);              // past the stall: a flat plate
     if (alpha > aMax) { stallT = smooth01((alpha - aMax) * (1.f / 0.16f)); cl = clMax + (plate - clMax) * stallT - 0.25f * sinf(stallT * 3.14159f); }
     else if (alpha < aMin) { stallT = smooth01((aMin - alpha) * (1.f / 0.16f)); const float c0 = cl0 + A.clAlpha * aMin; cl = c0 + (plate - c0) * stallT; }
-    float cd = A.cd0 + A.kInduced * cl * cl + A.flapCD * s.flap + (A.retract && s.gearDown ? 0.016f : 0.f);
+    // ground effect: within a wingspan of the ground the wingtip vortices are squashed: a little less induced drag and a
+    // little more lift, so the aircraft floats in the flare (mild, as real light aircraft feel it)
+    const float geK = s.agl < A.span ? sq(1.f - clampf(s.agl, 0.f, A.span) / A.span) : 0.f;
+    float cd = A.cd0 + A.kInduced * cl * cl * (1.f - 0.35f * geK) + A.flapCD * s.flap + (A.retract && s.gearDown ? 0.016f : 0.f);
     cd += (1.25f * sq(sinf(alpha)) - A.kInduced * cl * cl) * stallT;   // separated flow: drag of a plate
     if (A.vProp <= 0.f && V > A.vNe * 0.9f) cd += 0.0025f * (V - A.vNe * 0.9f);   // drag rise near the limit
     const float S = A.wingArea;
-    const float L = qbar * S * cl, D = qbar * S * cd, Y = -qbar * S * 0.9f * beta;
+    const float L = qbar * S * cl * (1.f + 0.06f * geK * (1.f - stallT)), D = qbar * S * cd, Y = -qbar * S * 0.9f * beta;
     // thrust
     float T;
     if (A.vProp > 0.f) T = A.thrust * s_powK[id] * s.power * fmaxf(0.f, 1.f - fmaxf(vf, 0.f) / A.vProp) * (rho * (1.f / 1.225f));
     else T = A.thrust * s_powK[id] * (0.05f + 0.95f * s.power) * powf(rho * (1.f / 1.225f), 0.7f);
+    // (a cheat: the airliner gets off a farm strip, home's included, and over its trees: more push on the roll and the
+    // first climb, fading out by 80 m up)
+    if (id == A_JET && !s.onWater) T *= 1.f + 1.1f * clampf(1.f - s.agl * (1.f / 80.f), 0.f, 1.f);
     // directions: lift square to the airflow in the plane of symmetry, drag against it
     float lx = s.ux * vf - s.fx * vu, ly = s.uy * vf - s.fy * vu, lz = s.uz * vf - s.fz * vu;
     { float ll = sqrtf(lx * lx + ly * ly + lz * lz); if (ll > 1e-4f) { lx /= ll; ly /= ll; lz /= ll; } else { lx = s.ux; ly = s.uy; lz = s.uz; } }
@@ -253,17 +260,27 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
         const float dhdx = water ? 0.f : -g.nx / fmaxf(g.ny, 0.2f), dhdz = water ? 0.f : -g.nz / fmaxf(g.ny, 0.2f);
         const float vyG = dhdx * s.vx + dhdz * s.vz;
         const float sink = vyG - s.vy;
-        const bool arrive = !s.onGround;
-        const bool airfield = g.mat == MAT_RUNWAY || g.mat == MAT_LOT;
+        // a touchdown is judged only after a real flight: a hop off a bump on the roll (under half a second, never
+        // 1.5 m up) just carries on rolling. (It had run the landing tests on every little bounce.)
+        const bool hop = !s.onGround && s.airT < 0.5f && s.hopTop < 1.5f;
+        const bool arrive = !s.onGround && !hop;
+        bool airfield = g.mat == MAT_RUNWAY || g.mat == MAT_LOT;
         const float rough = s_bush ? 1.f : A.roughField;
+        if (!airfield && !water && rough < 0.99f && gs > 6.f) {   // the mown grass inside an airfield's flat is prepared too
+            Airfield af;
+            if (airfieldAround(s.x, s.z, af)) {
+                float lon, lat; airfieldLocal(af, s.x, s.z, cosf(af.yaw), sinf(af.yaw), lon, lat);
+                if (fabsf(lon) < af.len * 0.5f + 40.f && fabsf(lat) < af.hw + 100.f) airfield = true;
+            }
+        }
         uint8_t crash = CRASH_NONE;
         if (water && A.gear != GEAR_FLOATS) crash = CRASH_WATER;
         else if (arrive) {
             s.evTouch = sink > 0.f ? sink : 0.01f;
             if (!s.gearDown) crash = CRASH_GEAR;
-            else if (sink > 4.6f) crash = CRASH_HARD;
-            else if (s.pitch < -0.21f && sink > 1.2f) crash = CRASH_TERRAIN;    // nose first
-            else if (fabsf(s.roll) > 0.38f) crash = CRASH_WING;                  // a wingtip
+            else if (sink > 5.2f) crash = CRASH_HARD;                            // (about 1,000 ft/min)
+            else if (s.pitch < -0.25f && sink > 1.8f) crash = CRASH_TERRAIN;    // nose first
+            else if (fabsf(s.roll) > 0.44f) crash = CRASH_WING;                  // a wingtip
             else if (!water && g.ny < 0.82f && gs > 8.f) crash = CRASH_TERRAIN;  // into a hillside
         }
         if (!crash && !water && !airfield && gs > 6.f) {
@@ -274,6 +291,7 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
         if (crash) { s.crash = crash; s.y = surf + gearH; s.vx = s.vy = s.vz = 0.f; s.onGround = true; s.onWater = water; return; }
         s.onGround = true; s.onWater = water;
         s.y = surf + gearH;
+        s.airT = 0.f; s.hopTop = 0.f;
         if (arrive && sink > 2.0f) { s.vy = vyG + sink * 0.28f; s.evBump = fminf(1.f, sink / 4.f); }   // a firm one bounces
         else if (s.vy < vyG) { if (vyG - s.vy > 0.6f) s.evBump = fminf(1.f, (vyG - s.vy) / 3.f); s.vy = vyG; }
         if (arrive) s.rollOut = 0.f;
@@ -290,7 +308,7 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
             if (gs > 2.f) s.evSplash = fminf(1.f, gs / 25.f);
         } else {
             const float mu = rollMu(g.surf) + (airfield ? 0.f : 0.03f);
-            const float muB = in.brake * (g.surf == SURF_TARMAC ? 0.5f : 0.3f);
+            const float muB = in.brake * (g.surf == SURF_TARMAC ? 0.5f : 0.3f) * (id == A_JET ? 1.6f : 1.f);   // (and stops on one)
             decel = load * G * (mu + muB);
             latK = 2.f + 9.f * load;
         }
@@ -311,8 +329,9 @@ void aircraftStep(AircraftState& s, uint8_t id, const AircraftInput& in, float d
         s.roll += (0.f - s.roll) * (1.f - expf(-dt * 8.f));
         s.p = s.q = 0.f; s.r = steerRate;
         basisFromEuler(s);
-    } else if (s.onGround) {
-        s.onGround = false; s.onWater = false; s.evLift = 1.f;
+    } else {
+        if (s.onGround) { s.onGround = false; s.onWater = false; s.evLift = 1.f; s.airT = 0.f; s.hopTop = 0.f; }
+        s.airT += dt; s.hopTop = fmaxf(s.hopTop, s.agl);
     }
 
     // ---- what the instruments read ----
@@ -336,14 +355,42 @@ float aircraftHitPost(AircraftState& s, uint8_t id, float ox, float oz, float ra
     const float lat = fabsf(-dx * sinf(s.yaw) + dz * cosf(s.yaw));
     const float reach = rad + (s.y - baseY > 2.f ? A.span * 0.45f : 0.8f);
     if (d > reach || (lat > rad + 0.8f && s.y - baseY < 2.f)) return 0.f;
+    if (s.vx * dx + s.vz * dz >= 0.f) return 0.f;              // moving away from it (or along it): nothing to hit
     const float v = s.speed;
     if (s.onGround && v < 4.f) {                               // taxiing into it: a bump, stopped
         const float nx = d > 0.01f ? dx / d : 1.f, nz = d > 0.01f ? dz / d : 0.f;
-        s.x = ox + nx * reach; s.z = oz + nz * reach;
+        s.x = ox + nx * (reach + 0.05f); s.z = oz + nz * (reach + 0.05f);   // (just clear: not caught again next step)
         s.vx = s.vz = 0.f;
         return v + 0.5f;
     }
     s.crash = CRASH_TREE;
+    s.vx = s.vy = s.vz = 0.f;
+    return v;
+}
+// A building: its real footprint (the hangar is 24 m deep and 30 m wide), not a circle round its middle (that put an
+// invisible wall 4 m out in front of the doors). Only the fuselage's nose margin is added: wings over a roof are fine.
+float aircraftHitBox(AircraftState& s, uint8_t id, float cx, float cz, float yaw, float halfF, float halfS, float baseY, float top) {
+    const AircraftSpec& A = AIRCRAFT[id % A_COUNT];
+    if (s.crash || s.y - A.gearH > top) return 0.f;
+    const float c = cosf(yaw), sn = sinf(yaw);
+    const float dx = s.x - cx, dz = s.z - cz;
+    const float f = dx * c + dz * sn, r = -dx * sn + dz * c;  // the aircraft in the building's frame
+    const float m = 0.8f;
+    const float of = fabsf(f) - (halfF + m), os = fabsf(r) - (halfS + m);
+    if (of > 0.f || os > 0.f) return 0.f;                      // outside the walls
+    // the nearest wall, and its outward normal
+    float nf = 0.f, ns = 0.f;
+    if (of > os) nf = f < 0.f ? -1.f : 1.f; else ns = r < 0.f ? -1.f : 1.f;
+    const float nx = nf * c - ns * sn, nz = nf * sn + ns * c;
+    if (s.vx * nx + s.vz * nz >= 0.f) return 0.f;              // moving away from that wall: nothing to hit
+    const float v = s.speed;
+    if (s.onGround && v < 4.f) {                               // a nudge into the wall: stopped, just clear of it
+        const float push = (of > os ? -of : -os) + 0.05f;
+        s.x += nx * push; s.z += nz * push;
+        s.vx = s.vz = 0.f;
+        return v + 0.5f;
+    }
+    s.crash = CRASH_BUILDING;
     s.vx = s.vy = s.vz = 0.f;
     return v;
 }

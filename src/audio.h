@@ -17,6 +17,7 @@ struct CarAudio {
     uint8_t surf, deck;
     bool air, limiter, reverse, cockpit;
     uint8_t blades; float stall; bool guns;
+    uint8_t craft;             // A_* (the cabin: how much of the world outside gets in)
 };
 extern CarAudio g_car;
 
